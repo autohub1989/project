@@ -100,7 +100,6 @@ const Register: React.FC = () => {
         setTimeout(() => {
           navigate('/login');
         }, 3000);
-      } else {
         toast.success(response.data.message);
         navigate('/login');
       }
