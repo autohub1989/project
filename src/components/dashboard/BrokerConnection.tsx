@@ -69,7 +69,7 @@ const BrokerConnection: React.FC = () => {
       logo: '⚡', 
       description: 'Next-generation trading platform with lightning-fast execution',
       features: ['Mobile trading', 'Advanced charts', 'Margin trading'],
-      authRequired: false
+      authRequired: true
     },
     { 
       id: '5paisa', 
@@ -197,7 +197,7 @@ const BrokerConnection: React.FC = () => {
     
     const authWindow = window.open(
       loginUrl,
-      'zerodha-auth',
+      brokerConnection.broker_name === 'zerodha' ? 'zerodha-auth' : 'upstox-auth',
       'width=600,height=700,scrollbars=yes,resizable=yes'
     );
 
@@ -237,8 +237,8 @@ const BrokerConnection: React.FC = () => {
       if (response.data.loginUrl) {
         // For OAuth brokers like Zerodha that require user login
         console.log('🔐 Opening authentication window for reconnection');
-        handleZerodhaAuth(connectionId, response.data.loginUrl);
-        toast.success('Please complete authentication to reconnect your account.');
+         response.data.brokerName === 'Zerodha' ? 'zerodha-auth' : 'upstox-auth',
+        toast.success(`Please complete authentication to reconnect your ${response.data.brokerName} account.`);
       } else {
         // For non-OAuth brokers (direct token refresh)
         toast.success('Reconnected successfully using stored credentials!');
@@ -651,9 +651,9 @@ const BrokerConnection: React.FC = () => {
                 animate={{ opacity: 1, y: 0, rotateY: 0 }}
                 transition={{ duration: 0.6, delay: index * 0.2 }}
                 whileHover={{ 
-                  scale: 1.05,
+                <h3 className="text-xl font-bold text-bronze-800 mb-4">Complete Broker Authentication</h3>
                   rotateY: 5,
-                  rotateX: 5,
+                  Click the button below to open the broker login page. After logging in and authorizing the app, 
                 }}
                 className="group p-6 rounded-2xl border-2 border-beige-200 bg-cream-50 hover:border-amber-300 transition-all duration-500 shadow-3d hover:shadow-3d-hover"
               >
@@ -1039,7 +1039,7 @@ const BrokerConnection: React.FC = () => {
                     className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium hover:shadow-3d-hover transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-3d"
                   >
                     <Settings className="w-4 h-4" />
-                    <span>{isSubmitting ? 'Updating...' : 'Update Settings'}</span>
+                    <span>Open Broker Login</span>
                   </motion.button>
 
                   <motion.button

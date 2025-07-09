@@ -1,5 +1,6 @@
 import { db } from '../database/init.js';
 import kiteService from './kiteService.js';
+import upstoxService from './upstoxService.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('ORDER_STATUS_SERVICE');
@@ -81,6 +82,8 @@ class OrderStatusService {
       let brokerOrderData;
       if (brokerConnection.broker_name.toLowerCase() === 'zerodha') {
         brokerOrderData = await kiteService.getOrderStatus(brokerConnectionId, brokerOrderId);
+      } else if (brokerConnection.broker_name.toLowerCase() === 'upstox') {
+        brokerOrderData = await upstoxService.getOrderStatus(brokerConnectionId, brokerOrderId);
       } else {
         // For other brokers, implement their specific API calls
         logger.warn(`Order status polling not implemented for ${brokerConnection.broker_name}`);
@@ -109,7 +112,12 @@ class OrderStatusService {
           // If order is completed, sync positions
           if (newStatus === 'COMPLETE') {
             try {
-              await kiteService.syncPositions(brokerConnectionId);
+              if (brokerConnection.broker_name.toLowerCase() === 'zerodha') {
+                await kiteService.syncPositions(brokerConnectionId);
+              } else if (brokerConnection.broker_name.toLowerCase() === 'upstox') {
+                // Upstox position sync would be implemented here
+                // await upstoxService.syncPositions(brokerConnectionId);
+              }
               logger.info(`Positions synced after order ${orderId} completion`);
             } catch (syncError) {
               logger.error(`Failed to sync positions after order completion:`, syncError);
