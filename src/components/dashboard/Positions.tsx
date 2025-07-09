@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   TrendingUp, TrendingDown, RefreshCw, Activity, DollarSign, 
   Target, BarChart3, AlertTriangle, Wifi, WifiOff, Eye, EyeOff,
-  Zap, Clock, ArrowUpRight, ArrowDownRight
+  Zap, Clock, ArrowUpRight, ArrowDownRight, Package, Layers
 } from 'lucide-react';
 import { brokerAPI } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -23,6 +23,19 @@ interface Position {
   connection_id: number;
 }
 
+interface Holding {
+  symbol: string;
+  exchange: string;
+  quantity: number;
+  average_price: number;
+  current_price: number;
+  pnl: number;
+  pnl_percentage: number;
+  last_updated: string;
+  broker_name: string;
+  connection_id: number;
+}
+
 interface PnLSummary {
   total_pnl: number;
   total_investment: number;
@@ -35,17 +48,21 @@ interface PnLSummary {
 }
 
 const Positions: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'positions' | 'holdings'>('positions');
   const [positions, setPositions] = useState<Position[]>([]);
+  const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pnlSummary, setPnlSummary] = useState<PnLSummary | null>(null);
   const [brokerConnections, setBrokerConnections] = useState<any[]>([]);
   const [selectedBroker, setSelectedBroker] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [isLiveUpdating, setIsLiveUpdating] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
-  const [updateInterval, setUpdateInterval] = useState(3000); // 3 seconds default
+  const [updateInterval, setUpdateInterval] = useState(5000); // 5 seconds default
   const [showDetails, setShowDetails] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<{[key: number]: boolean}>({});
+  const [nextUpdateIn, setNextUpdateIn] = useState(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const isComponentMounted = useRef(true);
 
   useEffect(() => {
@@ -54,6 +71,7 @@ const Positions: React.FC = () => {
     return () => {
       isComponentMounted.current = false;
       stopLiveUpdates();
+      stopCountdown();
     };
   }, []);
 
@@ -64,8 +82,22 @@ const Positions: React.FC = () => {
       stopLiveUpdates();
     }
     
-    return () => stopLiveUpdates();
-  }, [isLiveUpdating, updateInterval, selectedBroker]);
+    return () => {
+      stopLiveUpdates();
+      stopCountdown();
+    };
+  }, [isLiveUpdating, updateInterval, selectedBroker, activeTab]);
+
+  // Fetch data when tab changes
+  useEffect(() => {
+    if (brokerConnections.length > 0) {
+      if (activeTab === 'positions') {
+        fetchPositionsData();
+      } else {
+        fetchHoldingsData();
+      }
+    }
+  }, [activeTab, selectedBroker]);
 
   const fetchInitialData = async () => {
     try {
@@ -147,8 +179,67 @@ const Positions: React.FC = () => {
     }
   };
 
-  const calculatePnLSummary = (positions: Position[]) => {
-    if (positions.length === 0) {
+  const fetchHoldingsData = async () => {
+    try {
+      const activeConnections = brokerConnections.filter(
+        conn => selectedBroker === 'all' || conn.id.toString() === selectedBroker
+      );
+
+      if (activeConnections.length === 0) {
+        setHoldings([]);
+        setPnlSummary(null);
+        return;
+      }
+
+      const allHoldings: Holding[] = [];
+      const connectionStatuses: {[key: number]: boolean} = {};
+
+      // Fetch holdings from each active broker connection
+      for (const connection of activeConnections) {
+        try {
+          const response = await brokerAPI.getHoldings(connection.id);
+          connectionStatuses[connection.id] = true;
+          
+          if (response.data.holdings && response.data.holdings.length > 0) {
+            const formattedHoldings = response.data.holdings.map((holding: any) => ({
+              symbol: holding.symbol || holding.tradingsymbol,
+              exchange: holding.exchange || 'NSE',
+              quantity: holding.quantity || 0,
+              average_price: holding.average_price || holding.buy_price || holding.price || 0,
+              current_price: holding.current_price || holding.last_price || holding.ltp || 0,
+              pnl: holding.pnl || holding.unrealised || 0,
+              pnl_percentage: holding.pnl_percentage || 0,
+              last_updated: new Date().toISOString(),
+              broker_name: connection.broker_name,
+              connection_id: connection.id
+            }));
+            
+            allHoldings.push(...formattedHoldings);
+          }
+        } catch (error) {
+          console.error(`Failed to fetch holdings from ${connection.broker_name}:`, error);
+          connectionStatuses[connection.id] = false;
+        }
+      }
+
+      // Filter out zero quantity holdings
+      const activeHoldings = allHoldings.filter(holding => Math.abs(holding.quantity) > 0);
+      
+      setHoldings(activeHoldings);
+      setConnectionStatus(connectionStatuses);
+      calculatePnLSummary(activeHoldings);
+      setLastUpdateTime(new Date());
+      
+    } catch (error) {
+      console.error('Failed to fetch holdings:', error);
+      if (isComponentMounted.current) {
+        toast.error('Failed to fetch holdings');
+      }
+    }
+  };
+
+  const calculatePnLSummary = (data: (Position | Holding)[]) => {
+    if (data.length === 0) {
       setPnlSummary(null);
       return;
     }
@@ -157,17 +248,17 @@ const Positions: React.FC = () => {
       total_pnl: 0,
       total_investment: 0,
       total_current_value: 0,
-      total_positions: positions.length,
+      total_positions: data.length,
       profitable_positions: 0,
       loss_positions: 0,
       largest_gain: 0,
       largest_loss: 0
     };
 
-    positions.forEach(pos => {
-      const investment = Math.abs(pos.quantity) * pos.average_price;
-      const currentValue = Math.abs(pos.quantity) * pos.current_price;
-      const pnl = pos.pnl || (currentValue - investment) * (pos.quantity > 0 ? 1 : -1);
+    data.forEach(item => {
+      const investment = Math.abs(item.quantity) * item.average_price;
+      const currentValue = Math.abs(item.quantity) * item.current_price;
+      const pnl = item.pnl || (currentValue - investment);
 
       summary.total_pnl += pnl;
       summary.total_investment += investment;
@@ -187,14 +278,38 @@ const Positions: React.FC = () => {
 
   const startLiveUpdates = () => {
     stopLiveUpdates(); // Clear any existing interval
+    stopCountdown(); // Clear any existing countdown
     
     if (brokerConnections.length === 0) return;
     
+    // Start countdown
+    setNextUpdateIn(updateInterval / 1000);
+    startCountdown();
+    
     intervalRef.current = setInterval(() => {
       if (isComponentMounted.current) {
-        fetchPositionsData();
+        if (activeTab === 'positions') {
+          fetchPositionsData();
+        } else {
+          fetchHoldingsData();
+        }
+        // Restart countdown
+        setNextUpdateIn(updateInterval / 1000);
+        startCountdown();
       }
     }, updateInterval);
+  };
+
+  const startCountdown = () => {
+    stopCountdown();
+    countdownRef.current = setInterval(() => {
+      setNextUpdateIn(prev => {
+        if (prev <= 1) {
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
   };
 
   const stopLiveUpdates = () => {
@@ -202,6 +317,14 @@ const Positions: React.FC = () => {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
+  };
+
+  const stopCountdown = () => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+    setNextUpdateIn(0);
   };
 
   const toggleLiveUpdates = () => {
@@ -214,8 +337,12 @@ const Positions: React.FC = () => {
   };
 
   const handleManualRefresh = async () => {
-    await fetchPositionsData();
-    toast.success('Positions refreshed');
+    if (activeTab === 'positions') {
+      await fetchPositionsData();
+    } else {
+      await fetchHoldingsData();
+    }
+    toast.success(`${activeTab === 'positions' ? 'Positions' : 'Holdings'} refreshed`);
   };
 
   const getPnLColor = (pnl: number) => {
@@ -243,6 +370,8 @@ const Positions: React.FC = () => {
     return `${percentage > 0 ? '+' : ''}${percentage.toFixed(2)}%`;
   };
 
+  const currentData = activeTab === 'positions' ? positions : holdings;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -262,19 +391,53 @@ const Positions: React.FC = () => {
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-white flex items-center">
             <Activity className="w-8 h-8 mr-3 text-olive-400" />
-            Live Positions
+            Live {activeTab === 'positions' ? 'Positions' : 'Holdings'}
           </h1>
           <p className="text-olive-200/70 mt-1">
-            Real-time positions and P&L directly from your broker accounts
+            Real-time {activeTab} and P&L directly from your broker accounts
           </p>
           {lastUpdateTime && (
-            <p className="text-olive-300/60 text-sm mt-1">
-              Last updated: {format(lastUpdateTime, 'HH:mm:ss')}
-            </p>
+            <div className="flex items-center space-x-4 mt-1">
+              <p className="text-olive-300/60 text-sm">
+                Last updated: {format(lastUpdateTime, 'HH:mm:ss')}
+              </p>
+              {isLiveUpdating && nextUpdateIn > 0 && (
+                <p className="text-green-400 text-sm flex items-center space-x-1">
+                  <Clock className="w-3 h-3" />
+                  <span>Next update in {nextUpdateIn}s</span>
+                </p>
+              )}
+            </div>
           )}
         </div>
         
         <div className="flex items-center space-x-3 mt-4 sm:mt-0">
+          {/* Tab Switcher */}
+          <div className="flex bg-dark-800/50 rounded-lg p-1 border border-olive-500/20">
+            <button
+              onClick={() => setActiveTab('positions')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'positions'
+                  ? 'bg-olive-600 text-white'
+                  : 'text-olive-200 hover:text-white'
+              }`}
+            >
+              <Activity className="w-4 h-4 inline mr-2" />
+              Positions
+            </button>
+            <button
+              onClick={() => setActiveTab('holdings')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'holdings'
+                  ? 'bg-olive-600 text-white'
+                  : 'text-olive-200 hover:text-white'
+              }`}
+            >
+              <Package className="w-4 h-4 inline mr-2" />
+              Holdings
+            </button>
+          </div>
+
           {/* Broker Filter */}
           <select
             value={selectedBroker}
@@ -296,11 +459,11 @@ const Positions: React.FC = () => {
             onChange={(e) => setUpdateInterval(Number(e.target.value))}
             className="px-3 py-2 bg-dark-800/50 border border-olive-500/20 rounded-lg text-white text-sm focus:ring-2 focus:ring-olive-500 focus:border-transparent"
           >
-            <option value={1000}>1s</option>
             <option value={3000}>3s</option>
             <option value={5000}>5s</option>
             <option value={10000}>10s</option>
             <option value={30000}>30s</option>
+            <option value={60000}>1m</option>
           </select>
 
           {/* Manual Refresh */}
@@ -394,7 +557,7 @@ const Positions: React.FC = () => {
                 <Target className="w-6 h-6 text-white" />
               </div>
               <div className="text-olive-400 text-sm font-medium">
-                {pnlSummary.total_positions} positions
+                {pnlSummary.total_positions} {activeTab}
               </div>
             </div>
             <h3 className="text-2xl font-bold text-white mb-1">
@@ -441,7 +604,7 @@ const Positions: React.FC = () => {
         </motion.div>
       )}
 
-      {/* Positions Table */}
+      {/* Data Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -451,19 +614,26 @@ const Positions: React.FC = () => {
         <div className="p-6 border-b border-olive-500/10">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-white flex items-center">
-              <BarChart3 className="w-6 h-6 mr-2 text-olive-400" />
-              Live Positions ({positions.length})
+              {activeTab === 'positions' ? (
+                <BarChart3 className="w-6 h-6 mr-2 text-olive-400" />
+              ) : (
+                <Package className="w-6 h-6 mr-2 text-olive-400" />
+              )}
+              Live {activeTab === 'positions' ? 'Positions' : 'Holdings'} ({currentData.length})
             </h2>
             {isLiveUpdating && (
               <div className="flex items-center space-x-2 text-green-400">
                 <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                <span className="text-sm">Updating every {updateInterval/1000}s</span>
+                <span className="text-sm">
+                  Updating every {updateInterval/1000}s
+                  {nextUpdateIn > 0 && ` (next in ${nextUpdateIn}s)`}
+                </span>
               </div>
             )}
           </div>
         </div>
 
-        {positions.length > 0 ? (
+        {currentData.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-olive-800/20">
@@ -485,15 +655,15 @@ const Positions: React.FC = () => {
               </thead>
               <tbody>
                 <AnimatePresence>
-                  {positions.map((position, index) => {
-                    const investment = Math.abs(position.quantity) * position.average_price;
-                    const currentValue = Math.abs(position.quantity) * position.current_price;
-                    const calculatedPnL = position.pnl || (currentValue - investment) * (position.quantity > 0 ? 1 : -1);
+                  {currentData.map((item, index) => {
+                    const investment = Math.abs(item.quantity) * item.average_price;
+                    const currentValue = Math.abs(item.quantity) * item.current_price;
+                    const calculatedPnL = item.pnl || (currentValue - investment);
                     const pnlPercentage = investment > 0 ? (calculatedPnL / investment) * 100 : 0;
 
                     return (
                       <motion.tr
-                        key={`${position.symbol}-${position.connection_id}`}
+                        key={`${item.symbol}-${item.connection_id}`}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
@@ -502,31 +672,35 @@ const Positions: React.FC = () => {
                       >
                         <td className="py-4 px-6">
                           <div className="flex flex-col">
-                            <span className="font-medium text-white">{position.symbol}</span>
-                            <span className="text-xs text-olive-200/70">{position.exchange}</span>
+                            <span className="font-medium text-white">{item.symbol}</span>
+                            <span className="text-xs text-olive-200/70">{item.exchange}</span>
                           </div>
                         </td>
                         <td className="py-4 px-6">
                           <div className="flex items-center space-x-2">
-                            {position.quantity > 0 ? (
+                            {activeTab === 'positions' && (item as Position).quantity > 0 ? (
                               <TrendingUp className="w-4 h-4 text-green-400" />
-                            ) : (
+                            ) : activeTab === 'positions' && (item as Position).quantity < 0 ? (
                               <TrendingDown className="w-4 h-4 text-red-400" />
+                            ) : (
+                              <Layers className="w-4 h-4 text-blue-400" />
                             )}
                             <span className={`font-medium ${
-                              position.quantity > 0 ? 'text-green-400' : 'text-red-400'
+                              activeTab === 'positions' 
+                                ? (item as Position).quantity > 0 ? 'text-green-400' : 'text-red-400'
+                                : 'text-blue-400'
                             }`}>
-                              {Math.abs(position.quantity)}
+                              {Math.abs(item.quantity)}
                             </span>
                           </div>
                         </td>
                         <td className="py-4 px-6 text-olive-200">
-                          {formatCurrency(position.average_price)}
+                          {formatCurrency(item.average_price)}
                         </td>
                         <td className="py-4 px-6">
                           <div className="flex items-center space-x-2">
                             <span className="text-white font-medium">
-                              {formatCurrency(position.current_price)}
+                              {formatCurrency(item.current_price)}
                             </span>
                             {isLiveUpdating && (
                               <Zap className="w-3 h-3 text-yellow-400 animate-pulse" />
@@ -554,9 +728,9 @@ const Positions: React.FC = () => {
                             <td className="py-4 px-6">
                               <div className="flex items-center space-x-2">
                                 <span className="text-olive-200 capitalize">
-                                  {position.broker_name}
+                                  {item.broker_name}
                                 </span>
-                                {connectionStatus[position.connection_id] === false && (
+                                {connectionStatus[item.connection_id] === false && (
                                   <AlertTriangle className="w-4 h-4 text-red-400" />
                                 )}
                               </div>
@@ -572,12 +746,18 @@ const Positions: React.FC = () => {
           </div>
         ) : (
           <div className="text-center py-12">
-            <Activity className="w-16 h-16 text-olive-400/50 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-white mb-2">No Active Positions</h3>
+            {activeTab === 'positions' ? (
+              <Activity className="w-16 h-16 text-olive-400/50 mx-auto mb-4" />
+            ) : (
+              <Package className="w-16 h-16 text-olive-400/50 mx-auto mb-4" />
+            )}
+            <h3 className="text-lg font-medium text-white mb-2">
+              No Active {activeTab === 'positions' ? 'Positions' : 'Holdings'}
+            </h3>
             <p className="text-olive-200/70">
               {brokerConnections.length === 0 
-                ? 'Connect a broker account to see your positions'
-                : 'You currently have no open positions'
+                ? 'Connect a broker account to see your data'
+                : `You currently have no ${activeTab}`
               }
             </p>
           </div>
