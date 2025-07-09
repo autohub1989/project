@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   TrendingUp, TrendingDown, RefreshCw, Activity, DollarSign, 
   Target, BarChart3, AlertTriangle, Wifi, WifiOff, Eye, EyeOff,
-  Zap, Clock, ArrowUpRight, ArrowDownRight, Briefcase, PieChart
+  Zap, Clock, ArrowUpRight, ArrowDownRight
 } from 'lucide-react';
 import { brokerAPI } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -70,6 +70,19 @@ interface Holding {
   last_updated?: string;
 }
 
+interface Holding {
+  symbol: string;
+  exchange: string;
+  quantity: number;
+  average_price: number;
+  current_price: number;
+  pnl: number;
+  pnl_percentage: number;
+  last_updated: string;
+  broker_name: string;
+  connection_id: number;
+}
+
 interface PnLSummary {
   total_pnl: number;
   total_investment: number;
@@ -91,12 +104,10 @@ const Positions: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isLiveUpdating, setIsLiveUpdating] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
-  const [positionUpdateInterval, setPositionUpdateInterval] = useState(5000); // 5 seconds
-  const [holdingUpdateInterval, setHoldingUpdateInterval] = useState(3600000); // 1 hour
+  const [updateInterval, setUpdateInterval] = useState(3000); // 3 seconds default
   const [showDetails, setShowDetails] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<{[key: number]: boolean}>({});
-  const positionIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const holdingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isComponentMounted = useRef(true);
 
   useEffect(() => {
@@ -105,6 +116,7 @@ const Positions: React.FC = () => {
     return () => {
       isComponentMounted.current = false;
       stopLiveUpdates();
+      stopCountdown();
     };
   }, []);
 
@@ -116,7 +128,7 @@ const Positions: React.FC = () => {
     }
     
     return () => stopLiveUpdates();
-  }, [isLiveUpdating, positionUpdateInterval, holdingUpdateInterval, selectedBroker, activeTab]);
+  }, [isLiveUpdating, updateInterval, selectedBroker]);
 
   const fetchInitialData = async () => {
     try {
@@ -192,16 +204,11 @@ const Positions: React.FC = () => {
     }
   }, [brokerConnections, selectedBroker, holdings]);
 
-  const fetchHoldingsData = React.useCallback(async () => {
-    try {
-      const activeConnections = brokerConnections.filter(
-        conn => selectedBroker === 'all' || conn.id.toString() === selectedBroker
-      );
-
-      if (activeConnections.length === 0) {
-        setHoldings([]);
-        return;
-      }
+  const calculatePnLSummary = (positions: Position[]) => {
+    if (positions.length === 0) {
+      setPnlSummary(null);
+      return;
+    }
 
       const allHoldings: Holding[] = [];
       const connectionStatuses: {[key: number]: boolean} = {};
@@ -248,37 +255,17 @@ const Positions: React.FC = () => {
       total_pnl: 0,
       total_investment: 0,
       total_current_value: 0,
-      total_positions: positions.length + holdings.length,
+      total_positions: positions.length,
       profitable_positions: 0,
       loss_positions: 0,
       largest_gain: 0,
       largest_loss: 0
     };
 
-    // Calculate for positions
     positions.forEach(pos => {
-      const pnl = pos.pnl || pos.unrealised || 0;
       const investment = Math.abs(pos.quantity) * pos.average_price;
-      const currentValue = Math.abs(pos.quantity) * pos.last_price;
-
-      summary.total_pnl += pnl;
-      summary.total_investment += investment;
-      summary.total_current_value += currentValue;
-
-      if (pnl > 0) {
-        summary.profitable_positions++;
-        summary.largest_gain = Math.max(summary.largest_gain, pnl);
-      } else if (pnl < 0) {
-        summary.loss_positions++;
-        summary.largest_loss = Math.min(summary.largest_loss, pnl);
-      }
-    });
-
-    // Calculate for holdings
-    holdings.forEach(holding => {
-      const pnl = holding.pnl || 0;
-      const investment = holding.quantity * holding.average_price;
-      const currentValue = holding.quantity * holding.last_price;
+      const currentValue = Math.abs(pos.quantity) * pos.current_price;
+      const pnl = pos.pnl || (currentValue - investment) * (pos.quantity > 0 ? 1 : -1);
 
       summary.total_pnl += pnl;
       summary.total_investment += investment;
@@ -296,28 +283,17 @@ const Positions: React.FC = () => {
     setPnlSummary(summary);
   }, []);
 
-  const startLiveUpdates = React.useCallback(() => {
-    stopLiveUpdates();
+  const startLiveUpdates = () => {
+    stopLiveUpdates(); // Clear any existing interval
     
-    if (brokerConnections.length === 0) {
-      toast.error('No active broker connections to start live updates.');
-      return;
-    }
+    if (brokerConnections.length === 0) return;
     
-    // Start position updates (every 5 seconds by default)
-    positionIntervalRef.current = setInterval(() => {
-      if (isComponentMounted.current && (activeTab === 'positions' || activeTab === 'positions')) {
+    intervalRef.current = setInterval(() => {
+      if (isComponentMounted.current) {
         fetchPositionsData();
       }
-    }, positionUpdateInterval);
-
-    // Start holding updates (every 1 hour by default)
-    holdingIntervalRef.current = setInterval(() => {
-      if (isComponentMounted.current && (activeTab === 'holdings' || activeTab === 'positions')) {
-        fetchHoldingsData();
-      }
-    }, holdingUpdateInterval);
-  }, [brokerConnections, positionUpdateInterval, holdingUpdateInterval, fetchPositionsData, fetchHoldingsData, activeTab]);
+    }, updateInterval);
+  };
 
   const stopLiveUpdates = () => {
     if (positionIntervalRef.current) {
@@ -330,6 +306,14 @@ const Positions: React.FC = () => {
     }
   };
 
+  const stopCountdown = () => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+    setNextUpdateIn(0);
+  };
+
   const toggleLiveUpdates = () => {
     setIsLiveUpdating(!isLiveUpdating);
     if (!isLiveUpdating) {
@@ -340,12 +324,8 @@ const Positions: React.FC = () => {
   };
 
   const handleManualRefresh = async () => {
-    if (activeTab === 'positions') {
-      await fetchPositionsData();
-    } else {
-      await fetchHoldingsData();
-    }
-    toast.success(`${activeTab} refreshed`);
+    await fetchPositionsData();
+    toast.success('Positions refreshed');
   };
 
   const getPnLColor = (pnl: number) => {
@@ -373,6 +353,8 @@ const Positions: React.FC = () => {
     return `${percentage > 0 ? '+' : ''}${percentage.toFixed(2)}%`;
   };
 
+  const currentData = activeTab === 'positions' ? positions : holdings;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -390,21 +372,47 @@ const Positions: React.FC = () => {
         className="flex flex-col sm:flex-row sm:items-center sm:justify-between"
       >
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-bronze-800 flex items-center">
-            <Activity className="w-8 h-8 mr-3 text-amber-600" />
-            Portfolio Overview
+          <h1 className="text-2xl md:text-3xl font-bold text-white flex items-center">
+            <Activity className="w-8 h-8 mr-3 text-olive-400" />
+            Live Positions
           </h1>
-          <p className="text-bronze-600 mt-1">
-            Real-time positions and holdings directly from your broker accounts
+          <p className="text-olive-200/70 mt-1">
+            Real-time positions and P&L directly from your broker accounts
           </p>
           {lastUpdateTime && (
-            <p className="text-bronze-500 text-sm mt-1">
+            <p className="text-olive-300/60 text-sm mt-1">
               Last updated: {format(lastUpdateTime, 'HH:mm:ss')}
             </p>
           )}
         </div>
         
         <div className="flex items-center space-x-3 mt-4 sm:mt-0">
+          {/* Tab Switcher */}
+          <div className="flex bg-dark-800/50 rounded-lg p-1 border border-olive-500/20">
+            <button
+              onClick={() => setActiveTab('positions')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'positions'
+                  ? 'bg-olive-600 text-white'
+                  : 'text-olive-200 hover:text-white'
+              }`}
+            >
+              <Activity className="w-4 h-4 inline mr-2" />
+              Positions
+            </button>
+            <button
+              onClick={() => setActiveTab('holdings')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'holdings'
+                  ? 'bg-olive-600 text-white'
+                  : 'text-olive-200 hover:text-white'
+              }`}
+            >
+              <Package className="w-4 h-4 inline mr-2" />
+              Holdings
+            </button>
+          </div>
+
           {/* Broker Filter */}
           <select
             value={selectedBroker}
@@ -420,20 +428,18 @@ const Positions: React.FC = () => {
             ))}
           </select>
 
-          {/* Update Intervals */}
-          {activeTab === 'positions' && (
-            <select
-              value={positionUpdateInterval}
-              onChange={(e) => setPositionUpdateInterval(Number(e.target.value))}
-              className="px-3 py-2 bg-cream-50 border border-beige-200 rounded-lg text-bronze-800 text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-            >
-              <option value={1000}>1s</option>
-              <option value={3000}>3s</option>
-              <option value={5000}>5s</option>
-              <option value={10000}>10s</option>
-              <option value={30000}>30s</option>
-            </select>
-          )}
+          {/* Update Interval */}
+          <select
+            value={updateInterval}
+            onChange={(e) => setUpdateInterval(Number(e.target.value))}
+            className="px-3 py-2 bg-dark-800/50 border border-olive-500/20 rounded-lg text-white text-sm focus:ring-2 focus:ring-olive-500 focus:border-transparent"
+          >
+            <option value={1000}>1s</option>
+            <option value={3000}>3s</option>
+            <option value={5000}>5s</option>
+            <option value={10000}>10s</option>
+            <option value={30000}>30s</option>
+          </select>
 
           {/* Manual Refresh */}
           <motion.button
@@ -525,8 +531,8 @@ const Positions: React.FC = () => {
               <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
                 <Target className="w-6 h-6 text-white" />
               </div>
-              <div className="text-bronze-600 text-sm font-medium">
-                {pnlSummary.total_positions} items
+              <div className="text-olive-400 text-sm font-medium">
+                {pnlSummary.total_positions} positions
               </div>
             </div>
             <h3 className="text-2xl font-bold text-bronze-800 mb-1">
@@ -573,308 +579,147 @@ const Positions: React.FC = () => {
         </motion.div>
       )}
 
-      {/* Tabs */}
+      {/* Positions Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
         className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-3d border border-beige-200"
       >
-        <div className="flex border-b border-beige-200">
-          <motion.button
-            onClick={() => setActiveTab('positions')}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center space-x-2 ${
-              activeTab === 'positions'
-                ? 'text-amber-600 border-b-2 border-amber-600 bg-amber-50'
-                : 'text-bronze-600 hover:text-amber-600'
-            }`}
-          >
-            <Activity className="w-5 h-5" />
-            <span>Positions ({positions.length})</span>
-            {isLiveUpdating && activeTab === 'positions' && (
-              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-            )}
-          </motion.button>
-          
-          <motion.button
-            onClick={() => setActiveTab('holdings')}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center space-x-2 ${
-              activeTab === 'holdings'
-                ? 'text-amber-600 border-b-2 border-amber-600 bg-amber-50'
-                : 'text-bronze-600 hover:text-amber-600'
-            }`}
-          >
-            <Briefcase className="w-5 h-5" />
-            <span>Holdings ({holdings.length})</span>
-            {isLiveUpdating && activeTab === 'holdings' && (
-              <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+        <div className="p-6 border-b border-olive-500/10">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-white flex items-center">
+              <BarChart3 className="w-6 h-6 mr-2 text-olive-400" />
+              Live Positions ({positions.length})
+            </h2>
+            {isLiveUpdating && (
+              <div className="flex items-center space-x-2 text-green-400">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                <span className="text-sm">Updating every {updateInterval/1000}s</span>
+              </div>
             )}
           </motion.button>
         </div>
 
-        {/* Positions Tab Content */}
-        <AnimatePresence mode="wait">
-          {activeTab === 'positions' && (
-            <motion.div
-              key="positions"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
-              {positions.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-amber-50">
-                      <tr>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Symbol</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Qty</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Avg Price</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">LTP</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">P&L</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">P&L %</th>
+        {positions.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-olive-800/20">
+                <tr>
+                  <th className="text-left py-4 px-6 font-semibold text-olive-200">Symbol</th>
+                  <th className="text-left py-4 px-6 font-semibold text-olive-200">Qty</th>
+                  <th className="text-left py-4 px-6 font-semibold text-olive-200">Avg Price</th>
+                  <th className="text-left py-4 px-6 font-semibold text-olive-200">Current Price</th>
+                  <th className="text-left py-4 px-6 font-semibold text-olive-200">P&L</th>
+                  <th className="text-left py-4 px-6 font-semibold text-olive-200">P&L %</th>
+                  {showDetails && (
+                    <>
+                      <th className="text-left py-4 px-6 font-semibold text-olive-200">Investment</th>
+                      <th className="text-left py-4 px-6 font-semibold text-olive-200">Current Value</th>
+                      <th className="text-left py-4 px-6 font-semibold text-olive-200">Broker</th>
+                    </>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                <AnimatePresence>
+                  {positions.map((position, index) => {
+                    const investment = Math.abs(position.quantity) * position.average_price;
+                    const currentValue = Math.abs(position.quantity) * position.current_price;
+                    const calculatedPnL = position.pnl || (currentValue - investment) * (position.quantity > 0 ? 1 : -1);
+                    const pnlPercentage = investment > 0 ? (calculatedPnL / investment) * 100 : 0;
+
+                    return (
+                      <motion.tr
+                        key={`${position.symbol}-${position.connection_id}`}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        transition={{ delay: index * 0.05 }}
+                        className="border-b border-olive-500/10 hover:bg-olive-800/10 transition-colors"
+                      >
+                        <td className="py-4 px-6">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-white">{position.symbol}</span>
+                            <span className="text-xs text-olive-200/70">{position.exchange}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex items-center space-x-2">
+                            {position.quantity > 0 ? (
+                              <TrendingUp className="w-4 h-4 text-green-400" />
+                            ) : (
+                              <TrendingDown className="w-4 h-4 text-red-400" />
+                            )}
+                            <span className={`font-medium ${
+                              position.quantity > 0 ? 'text-green-400' : 'text-red-400'
+                            }`}>
+                              {Math.abs(position.quantity)}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6 text-olive-200">
+                          {formatCurrency(position.average_price)}
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-white font-medium">
+                              {formatCurrency(position.current_price)}
+                            </span>
+                            {isLiveUpdating && (
+                              <Zap className="w-3 h-3 text-yellow-400 animate-pulse" />
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <span className={`font-bold ${getPnLColor(calculatedPnL)}`}>
+                            {calculatedPnL > 0 ? '+' : ''}{formatCurrency(calculatedPnL)}
+                          </span>
+                        </td>
+                        <td className="py-4 px-6">
+                          <span className={`font-medium ${getPnLColor(calculatedPnL)}`}>
+                            {formatPercentage(pnlPercentage)}
+                          </span>
+                        </td>
                         {showDetails && (
                           <>
-                            <th className="text-left py-4 px-6 font-semibold text-bronze-800">Value</th>
-                            <th className="text-left py-4 px-6 font-semibold text-bronze-800">Product</th>
-                            <th className="text-left py-4 px-6 font-semibold text-bronze-800">Broker</th>
+                            <td className="py-4 px-6 text-olive-200">
+                              {formatCurrency(investment)}
+                            </td>
+                            <td className="py-4 px-6 text-olive-200">
+                              {formatCurrency(currentValue)}
+                            </td>
+                            <td className="py-4 px-6">
+                              <div className="flex items-center space-x-2">
+                                <span className="text-olive-200 capitalize">
+                                  {position.broker_name}
+                                </span>
+                                {connectionStatus[position.connection_id] === false && (
+                                  <AlertTriangle className="w-4 h-4 text-red-400" />
+                                )}
+                              </div>
+                            </td>
                           </>
                         )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <AnimatePresence>
-                        {positions.map((position, index) => {
-                          const pnl = position.pnl || position.unrealised || 0;
-                          const pnlPercentage = position.average_price > 0 ? (pnl / (Math.abs(position.quantity) * position.average_price)) * 100 : 0;
-
-                          return (
-                            <motion.tr
-                              key={`${position.tradingsymbol}-${position.connection_id}`}
-                              initial={{ opacity: 0, y: 20 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: -20 }}
-                              transition={{ delay: index * 0.05 }}
-                              className="border-b border-beige-100 hover:bg-amber-50/50 transition-colors"
-                            >
-                              <td className="py-4 px-6">
-                                <div className="flex flex-col">
-                                  <span className="font-medium text-bronze-800">{position.tradingsymbol}</span>
-                                  <span className="text-xs text-bronze-600">{position.exchange}</span>
-                                </div>
-                              </td>
-                              <td className="py-4 px-6">
-                                <div className="flex items-center space-x-2">
-                                  {position.quantity > 0 ? (
-                                    <TrendingUp className="w-4 h-4 text-green-600" />
-                                  ) : (
-                                    <TrendingDown className="w-4 h-4 text-red-600" />
-                                  )}
-                                  <span className={`font-medium ${
-                                    position.quantity > 0 ? 'text-green-600' : 'text-red-600'
-                                  }`}>
-                                    {Math.abs(position.quantity)}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="py-4 px-6 text-bronze-800">
-                                {formatCurrency(position.average_price)}
-                              </td>
-                              <td className="py-4 px-6">
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-bronze-800 font-medium">
-                                    {formatCurrency(position.last_price)}
-                                  </span>
-                                  {isLiveUpdating && (
-                                    <Zap className="w-3 h-3 text-yellow-500 animate-pulse" />
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-4 px-6">
-                                <span className={`font-bold ${getPnLColor(pnl)}`}>
-                                  {pnl > 0 ? '+' : ''}{formatCurrency(pnl)}
-                                </span>
-                              </td>
-                              <td className="py-4 px-6">
-                                <span className={`font-medium ${getPnLColor(pnl)}`}>
-                                  {formatPercentage(pnlPercentage)}
-                                </span>
-                              </td>
-                              {showDetails && (
-                                <>
-                                  <td className="py-4 px-6 text-bronze-800">
-                                    {formatCurrency(position.value || (Math.abs(position.quantity) * position.last_price))}
-                                  </td>
-                                  <td className="py-4 px-6 text-bronze-800">
-                                    {position.product}
-                                  </td>
-                                  <td className="py-4 px-6">
-                                    <div className="flex items-center space-x-2">
-                                      <span className="text-bronze-800 capitalize">
-                                        {position.broker_name}
-                                      </span>
-                                      {connectionStatus[position.connection_id!] === false && (
-                                        <AlertTriangle className="w-4 h-4 text-red-600" />
-                                      )}
-                                    </div>
-                                  </td>
-                                </>
-                              )}
-                            </motion.tr>
-                          );
-                        })}
-                      </AnimatePresence>
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="text-center py-12">
-                  <Activity className="w-16 h-16 text-amber-400/50 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-bronze-800 mb-2">No Active Positions</h3>
-                  <p className="text-bronze-600">
-                    {brokerConnections.length === 0 
-                      ? 'Connect a broker account to see your positions'
-                      : 'You currently have no open positions'
-                    }
-                  </p>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {/* Holdings Tab Content */}
-          {activeTab === 'holdings' && (
-            <motion.div
-              key="holdings"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
-              {holdings.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-blue-50">
-                      <tr>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Symbol</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Qty</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Avg Price</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">LTP</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">P&L</th>
-                        <th className="text-left py-4 px-6 font-semibold text-bronze-800">Day Change</th>
-                        {showDetails && (
-                          <>
-                            <th className="text-left py-4 px-6 font-semibold text-bronze-800">Value</th>
-                            <th className="text-left py-4 px-6 font-semibold text-bronze-800">T1 Qty</th>
-                            <th className="text-left py-4 px-6 font-semibold text-bronze-800">Broker</th>
-                          </>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <AnimatePresence>
-                        {holdings.map((holding, index) => {
-                          const pnl = holding.pnl || 0;
-                          const dayChange = holding.day_change || 0;
-                          const dayChangePercentage = holding.day_change_percentage || 0;
-
-                          return (
-                            <motion.tr
-                              key={`${holding.tradingsymbol}-${holding.connection_id}`}
-                              initial={{ opacity: 0, y: 20 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: -20 }}
-                              transition={{ delay: index * 0.05 }}
-                              className="border-b border-beige-100 hover:bg-blue-50/50 transition-colors"
-                            >
-                              <td className="py-4 px-6">
-                                <div className="flex flex-col">
-                                  <span className="font-medium text-bronze-800">{holding.tradingsymbol}</span>
-                                  <span className="text-xs text-bronze-600">{holding.exchange}</span>
-                                </div>
-                              </td>
-                              <td className="py-4 px-6">
-                                <div className="flex flex-col">
-                                  <span className="font-medium text-bronze-800">{holding.quantity}</span>
-                                  {holding.used_quantity > 0 && (
-                                    <span className="text-xs text-amber-600">Used: {holding.used_quantity}</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-4 px-6 text-bronze-800">
-                                {formatCurrency(holding.average_price)}
-                              </td>
-                              <td className="py-4 px-6">
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-bronze-800 font-medium">
-                                    {formatCurrency(holding.last_price)}
-                                  </span>
-                                  {isLiveUpdating && (
-                                    <Clock className="w-3 h-3 text-blue-500 animate-pulse" />
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-4 px-6">
-                                <span className={`font-bold ${getPnLColor(pnl)}`}>
-                                  {pnl > 0 ? '+' : ''}{formatCurrency(pnl)}
-                                </span>
-                              </td>
-                              <td className="py-4 px-6">
-                                <div className="flex flex-col">
-                                  <span className={`font-medium ${getPnLColor(dayChange)}`}>
-                                    {dayChange > 0 ? '+' : ''}{formatCurrency(dayChange)}
-                                  </span>
-                                  <span className={`text-xs ${getPnLColor(dayChange)}`}>
-                                    {formatPercentage(dayChangePercentage)}
-                                  </span>
-                                </div>
-                              </td>
-                              {showDetails && (
-                                <>
-                                  <td className="py-4 px-6 text-bronze-800">
-                                    {formatCurrency(holding.quantity * holding.last_price)}
-                                  </td>
-                                  <td className="py-4 px-6 text-bronze-800">
-                                    {holding.t1_quantity}
-                                  </td>
-                                  <td className="py-4 px-6">
-                                    <div className="flex items-center space-x-2">
-                                      <span className="text-bronze-800 capitalize">
-                                        {holding.broker_name}
-                                      </span>
-                                      {connectionStatus[holding.connection_id!] === false && (
-                                        <AlertTriangle className="w-4 h-4 text-red-600" />
-                                      )}
-                                    </div>
-                                  </td>
-                                </>
-                              )}
-                            </motion.tr>
-                          );
-                        })}
-                      </AnimatePresence>
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="text-center py-12">
-                  <Briefcase className="w-16 h-16 text-blue-400/50 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-bronze-800 mb-2">No Holdings</h3>
-                  <p className="text-bronze-600">
-                    {brokerConnections.length === 0 
-                      ? 'Connect a broker account to see your holdings'
-                      : 'You currently have no holdings'
-                    }
-                  </p>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
+                      </motion.tr>
+                    );
+                  })}
+                </AnimatePresence>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-12">
+            <Activity className="w-16 h-16 text-olive-400/50 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-white mb-2">No Active Positions</h3>
+            <p className="text-olive-200/70">
+              {brokerConnections.length === 0 
+                ? 'Connect a broker account to see your positions'
+                : 'You currently have no open positions'
+              }
+            </p>
+          </div>
+        )}
       </motion.div>
 
       {/* Connection Status */}
