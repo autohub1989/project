@@ -1061,46 +1061,48 @@ router.post('/test/:connectionId', authenticateToken, async (req, res) => {
     }
 
     try {
-      // Test connection using KiteService
-      const testResult = await kiteService.testConnection(connectionId);
-      
+      let testResult;
+
+      if (connection.broker_name.toLowerCase() === 'zerodha') {
+        // Test connection using KiteService
+        testResult = await kiteService.testConnection(connectionId);
+      } else if (connection.broker_name.toLowerCase() === 'upstox') {
+        // Test connection using UpstoxService
+        testResult = await upstoxService.getProfile(connectionId);
+      } else {
+        return res.status(400).json({ error: 'Unsupported broker' });
+      }
+
       res.json({ 
-        message: 'Broker connection is working',
+        message: `${connection.broker_name} connection is working`,
         profile: testResult,
         tokenExpiresAt: connection.access_token_expires_at,
         tokenExpiresIn: connection.access_token_expires_at - now
       });
-    } else if (connection.broker_name.toLowerCase() === 'upstox') {
-      // Test connection using UpstoxService
-      const testResult = await upstoxService.getProfile(connectionId);
-      
-      res.json({ 
-        message: 'Upstox connection is working',
-        profile: testResult,
-        tokenExpiresAt: connection.access_token_expires_at,
-        tokenExpiresIn: connection.access_token_expires_at - now
-      });
+
     } catch (testError) {
       console.error('❌ Connection test failed:', testError);
       
       // Check if it's a token-related error
-      if (testError.message && testError.message.includes('api_key') || testError.message.includes('access_token')) {
+      if (testError.message && (testError.message.includes('api_key') || testError.message.includes('access_token'))) {
         return res.status(401).json({ 
           error: 'Invalid or expired credentials. Please reconnect your account.',
           tokenExpired: true,
           details: testError.message
         });
       }
-      
+
       res.status(500).json({ 
         error: 'Connection test failed',
         details: testError.message
       });
     }
+
   } catch (error) {
     console.error('Test connection error:', error);
     res.status(500).json({ error: 'Broker connection test failed' });
   }
 });
+
 
 export default router;
