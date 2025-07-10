@@ -5,6 +5,7 @@ import { authenticateToken } from '../middleware/auth.js';
 import { encryptData, decryptData, testEncryption } from '../utils/encryption.js';
 import kiteService from '../services/kiteService.js';
 import upstoxService from '../services/upstoxService.js';
+import angelService from '../services/angelService.js';
 import createLogger from '../utils/logger.js';
 
 const logger = createLogger('BrokerHandler');
@@ -437,6 +438,16 @@ router.post('/connect', authenticateToken, async (req, res) => {
         logger.error('Failed to generate Upstox login URL:', error);
         res.status(400).json({ error: 'Invalid API key or failed to generate login URL' });
       }
+    } else if (brokerName.toLowerCase() === 'angel') {
+      // For Angel Broking, we need additional credentials (client code, password, TOTP)
+      res.json({ 
+        message: 'Angel Broking credentials stored. Additional authentication required.',
+        connectionId,
+        webhookUrl,
+        requiresAuth: true,
+        authType: 'credentials', // Indicates manual credential entry
+        connectionName: finalConnectionName
+      });
     } else {
       // For other brokers, mark as connected (mock implementation)
       logger.info('Connected to broker:', brokerName);
@@ -518,6 +529,16 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           reconnect: true,
           brokerName: 'Upstox'
         });
+      } else if (connection.broker_name.toLowerCase() === 'angel') {
+        logger.info('Angel Broking reconnection requires manual authentication');
+
+        res.json({
+          message: 'Please complete authentication to reconnect your Angel Broking account.',
+          requiresAuth: true,
+          authType: 'credentials',
+          reconnect: true,
+          brokerName: 'Angel Broking'
+        });
       } else {
         return res.status(400).json({
           error: 'Direct reconnection not supported for this broker. Please update your connection.',
@@ -564,7 +585,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
     // Parse the state parameter
     let connectionId, reconnect;
     try {
-      const stateObj = JSON.parse(decodeURIComponent(state || '{}'));
+      const stateObj = state ? JSON.parse(decodeURIComponent(state)) : {};
       connectionId = stateObj.connection_id;
       reconnect = stateObj.reconnect;
     } catch (e) {
@@ -756,7 +777,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
     // Parse the state parameter
     let connectionId, reconnect;
     try {
-      const stateObj = JSON.parse(decodeURIComponent(state || '{}'));
+      const stateObj = state ? JSON.parse(decodeURIComponent(state)) : {};
       connectionId = stateObj.connection_id;
       reconnect = stateObj.reconnect;
     } catch (e) {
@@ -907,6 +928,86 @@ router.get('/auth/upstox/callback', async (req, res) => {
   }
 });
 
+// Angel Broking manual authentication endpoint
+router.post('/auth/angel/login', async (req, res) => {
+  try {
+    const { connectionId, clientCode, password, totp } = req.body;
+
+    logger.info('Angel Broking manual authentication:', { connectionId, clientCode });
+
+    if (!connectionId || !clientCode || !password) {
+      return res.status(400).json({ 
+        error: 'Connection ID, client code, and password are required' 
+      });
+    }
+
+    // Get broker connection
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ?',
+      [connectionId]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found' });
+    }
+
+    try {
+      // Decrypt credentials
+      const apiKey = decryptData(connection.api_key);
+      
+      logger.info('Generating access token for Angel connection:', connectionId);
+      
+      // Generate access token using Angel API
+      const accessTokenResponse = await angelService.generateAccessToken(apiKey, clientCode, password, totp);
+      
+      if (!accessTokenResponse || !accessTokenResponse.access_token) {
+        throw new Error('Failed to generate access token');
+      }
+
+      const accessToken = accessTokenResponse.access_token;
+      
+      // Set token expiry (Angel tokens typically expire in 24 hours)
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const expiresAt = Math.floor(tomorrow.getTime() / 1000);
+
+      // Store access token
+      await db.runAsync(`
+        UPDATE broker_connections 
+        SET access_token = ?, access_token_expires_at = ?, is_active = 1, is_authenticated = 1, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = ?
+      `, [encryptData(accessToken), expiresAt, connectionId]);
+
+      // Clear any cached Angel instances to force refresh
+      angelService.clearCachedInstance(connectionId);
+
+      logger.info('Angel authentication completed for connection:', connectionId);
+
+      res.json({
+        success: true,
+        message: 'Angel Broking authentication successful',
+        connectionId,
+        expiresAt: new Date(expiresAt * 1000).toISOString()
+      });
+
+    } catch (authError) {
+      logger.error('Angel authentication error:', authError);
+      res.status(500).json({
+        error: 'Authentication failed',
+        message: authError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Angel manual authentication error:', error);
+    res.status(500).json({
+      error: 'Authentication failed',
+      message: error.message
+    });
+  }
+});
+
 // Disconnect broker
 router.post('/disconnect', authenticateToken, async (req, res) => {
   try {
@@ -1042,6 +1143,9 @@ router.post('/test/:connectionId', authenticateToken, async (req, res) => {
       } else if (connection.broker_name.toLowerCase() === 'upstox') {
         // Test connection using UpstoxService
         testResult = await upstoxService.getProfile(connectionId);
+      } else if (connection.broker_name.toLowerCase() === 'angel') {
+        // Test connection using AngelService
+        testResult = await angelService.getProfile(connectionId);
       } else {
         return res.status(400).json({ error: 'Unsupported broker' });
       }

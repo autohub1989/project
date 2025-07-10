@@ -3,6 +3,7 @@ import { db } from '../database/init.js';
 import { subscriptionAPI } from '../services/subscriptionService.js';
 import kiteService from '../services/kiteService.js';
 import upstoxService from '../services/upstoxService.js';
+import angelService from '../services/angelService.js';
 import orderStatusService from '../services/orderStatusService.js';
 import createLogger from '../utils/logger.js';
 
@@ -65,6 +66,22 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
       trigger_price: ['SL', 'SL-M'].includes(payload.order_type) ? parseFloat(payload.trigger_price || 0) : 0,
       is_amo: false,
       tag: 'AutoTraderHub'
+    };
+  } else if (brokerName.toLowerCase() === 'angel') {
+    // For Angel Broking, we need symboltoken and specific format
+    formatted = {
+      variety: 'NORMAL',
+      tradingsymbol: symbolStr,
+      symboltoken: payload.symboltoken || symbolStr, // This should be looked up from symbol
+      transactiontype: payload.action.toUpperCase(),
+      exchange: payload.exchange || 'NSE',
+      ordertype: payload.order_type || 'MARKET',
+      producttype: payload.product === 'MIS' ? 'INTRADAY' : (payload.product === 'CNC' ? 'DELIVERY' : 'INTRADAY'),
+      duration: payload.validity || 'DAY',
+      price: payload.order_type === 'LIMIT' ? parseFloat(payload.price || 0).toString() : '0',
+      squareoff: '0',
+      stoploss: ['SL', 'SL-M'].includes(payload.order_type) ? parseFloat(payload.trigger_price || 0).toString() : '0',
+      quantity: parseInt(payload.quantity)
     };
   } else {
     // Default format for other brokers
@@ -218,6 +235,13 @@ router.post('/:userId/:webhookId', async (req, res) => {
         debugLogs.push(`🔍 Clean orderParams being sent to upstoxService: ${JSON.stringify(cleanOrderParams)}`);
         
         brokerResponse = await upstoxService.placeOrder(brokerConnection.id, cleanOrderParams);
+      } else if (brokerConnection.broker_name.toLowerCase() === 'angel') {
+        // Create a clean copy of orderParams for Angel
+        const cleanOrderParams = { ...orderParams };
+        console.log('🔍 Clean orderParams being sent to angelService:', JSON.stringify(cleanOrderParams, null, 2));
+        debugLogs.push(`🔍 Clean orderParams being sent to angelService: ${JSON.stringify(cleanOrderParams)}`);
+        
+        brokerResponse = await angelService.placeOrder(brokerConnection.id, cleanOrderParams);
       } else {
         brokerResponse = { success: true, order_id: `MOCK_${Date.now()}`, data: { status: 'COMPLETE' } };
       }
@@ -250,6 +274,9 @@ router.post('/:userId/:webhookId', async (req, res) => {
           } else if (brokerConnection.broker_name.toLowerCase() === 'upstox') {
             // Upstox position sync would be implemented here
             // await upstoxService.syncPositions(brokerConnection.id);
+          } else if (brokerConnection.broker_name.toLowerCase() === 'angel') {
+            // Angel position sync would be implemented here
+            // await angelService.syncPositions(brokerConnection.id);
           }
           debugLogs.push('🔄 Positions synced successfully.');
         } catch (syncError) {
