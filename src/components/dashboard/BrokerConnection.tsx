@@ -48,6 +48,13 @@ const BrokerConnection: React.FC = () => {
   const [editingConnection, setEditingConnection] = useState<BrokerConnection | null>(null);
   const [showEditForm, setShowEditForm] = useState(false);
   const [deletingConnection, setDeletingConnection] = useState<number | null>(null);
+  const [showAngelAuth, setShowAngelAuth] = useState<{connectionId: number, brokerName: string} | null>(null);
+  const [angelAuthData, setAngelAuthData] = useState({
+    clientCode: '',
+    password: '',
+    totp: ''
+  });
+  const [angelAuthLoading, setAngelAuthLoading] = useState(false);
   
   const { register, handleSubmit, watch, reset, setValue, formState: { errors } } = useForm<BrokerConnectionForm>();
   const selectedBroker = watch('brokerName');
@@ -67,6 +74,14 @@ const BrokerConnection: React.FC = () => {
       logo: '⚡', 
       description: 'Next-generation trading platform with lightning-fast execution',
       features: ['Mobile trading', 'Advanced charts', 'Margin trading'],
+      authRequired: true
+    },
+    { 
+      id: 'angel', 
+      name: 'Angel Broking', 
+      logo: '👼', 
+      description: 'Smart API with comprehensive trading solutions',
+      features: ['Smart API', 'Real-time data', 'Multi-segment trading'],
       authRequired: true
     },
     { 
@@ -107,6 +122,13 @@ const BrokerConnection: React.FC = () => {
           loginUrl: response.data.loginUrl
         });
         toast.success('Credentials saved! Please complete authentication.');
+      } else if (response.data.requiresAuth && response.data.authType === 'credentials') {
+        // For Angel Broking, show manual authentication form
+        setShowAngelAuth({
+          connectionId: response.data.connectionId,
+          brokerName: data.brokerName
+        });
+        toast.success('Credentials saved! Please complete authentication.');
       } else {
         toast.success('Broker connected successfully!');
         reset();
@@ -144,6 +166,13 @@ const BrokerConnection: React.FC = () => {
         setAuthenticationStep({
           connectionId: response.data.connectionId,
           loginUrl: response.data.loginUrl
+        });
+        toast.success('Credentials updated! Please complete authentication.');
+      } else if (response.data.requiresAuth && response.data.authType === 'credentials') {
+        // For Angel Broking, show manual authentication form
+        setShowAngelAuth({
+          connectionId: response.data.connectionId,
+          brokerName: editingConnection.broker_name
         });
         toast.success('Credentials updated! Please complete authentication.');
       } else {
@@ -189,6 +218,31 @@ const BrokerConnection: React.FC = () => {
     }
   };
 
+  const handleAngelAuth = async () => {
+    if (!showAngelAuth) return;
+    
+    setAngelAuthLoading(true);
+    try {
+      const response = await brokerAPI.angelAuth({
+        connectionId: showAngelAuth.connectionId,
+        clientCode: angelAuthData.clientCode,
+        password: angelAuthData.password,
+        totp: angelAuthData.totp
+      });
+      
+      if (response.data.success) {
+        toast.success('Angel Broking authentication successful!');
+        setShowAngelAuth(null);
+        setAngelAuthData({ clientCode: '', password: '', totp: '' });
+        fetchConnections();
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Authentication failed');
+    } finally {
+      setAngelAuthLoading(false);
+    }
+  };
+
   const handleZerodhaAuth = (connectionId: number, loginUrl: string) => {
     setReconnectingConnection(connectionId);
     
@@ -229,6 +283,13 @@ const BrokerConnection: React.FC = () => {
       const response = await brokerAPI.reconnect(connectionId);
       
       if (response.data.loginUrl) {
+        toast.success(`Please complete authentication to reconnect your ${response.data.brokerName} account.`);
+      } else if (response.data.authType === 'credentials') {
+        // For Angel Broking, show manual authentication form
+        setShowAngelAuth({
+          connectionId: connectionId,
+          brokerName: response.data.brokerName
+        });
         toast.success(`Please complete authentication to reconnect your ${response.data.brokerName} account.`);
       } else {
         toast.success('Reconnected successfully using stored credentials!');
@@ -739,6 +800,102 @@ const BrokerConnection: React.FC = () => {
                 >
                   Cancel
                 </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Angel Broking Authentication Modal */}
+      <AnimatePresence>
+        {showAngelAuth && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-2xl p-6 max-w-md w-full border border-beige-200 shadow-3d"
+            >
+              <h3 className="text-xl font-bold text-bronze-800 mb-4">Angel Broking Authentication</h3>
+              <p className="text-bronze-600 mb-6">
+                Enter your Angel Broking credentials to complete the authentication.
+              </p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-bronze-700 mb-2">
+                    Client Code
+                  </label>
+                  <input
+                    type="text"
+                    value={angelAuthData.clientCode}
+                    onChange={(e) => setAngelAuthData(prev => ({ ...prev, clientCode: e.target.value }))}
+                    className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    placeholder="Enter your client code"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-bronze-700 mb-2">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={angelAuthData.password}
+                    onChange={(e) => setAngelAuthData(prev => ({ ...prev, password: e.target.value }))}
+                    className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    placeholder="Enter your password"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-bronze-700 mb-2">
+                    TOTP (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={angelAuthData.totp}
+                    onChange={(e) => setAngelAuthData(prev => ({ ...prev, totp: e.target.value }))}
+                    className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    placeholder="Enter TOTP if enabled"
+                  />
+                </div>
+
+                <div className="flex space-x-4">
+                  <motion.button
+                    onClick={handleAngelAuth}
+                    disabled={angelAuthLoading || !angelAuthData.clientCode || !angelAuthData.password}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium hover:shadow-3d-hover transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-3d"
+                  >
+                    {angelAuthLoading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Authenticating...</span>
+                      </>
+                    ) : (
+                      <span>Authenticate</span>
+                    )}
+                  </motion.button>
+
+                  <motion.button
+                    onClick={() => {
+                      setShowAngelAuth(null);
+                      setAngelAuthData({ clientCode: '', password: '', totp: '' });
+                    }}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="px-6 py-3 bg-beige-100 text-bronze-700 rounded-xl font-medium hover:bg-beige-200 transition-colors border border-beige-200"
+                  >
+                    Cancel
+                  </motion.button>
+                </div>
               </div>
             </motion.div>
           </motion.div>

@@ -122,6 +122,19 @@ export const brokerAPI = {
       throw error;
     }
   },
+  
+  // Angel Broking manual authentication
+  angelAuth: async (data) => {
+    try {
+      console.log('👼 Angel Broking manual authentication for connection:', data.connectionId);
+      const response = await api.post('/broker/auth/angel/login', data);
+      console.log('✅ Angel authentication successful:', response.data);
+      return response;
+    } catch (error) {
+      console.error('❌ Angel authentication failed:', error);
+      throw error;
+    }
+  },
 };
 
 // Enhanced Orders API - Updated for Node.js Express endpoints
