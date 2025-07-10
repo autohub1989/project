@@ -37,7 +37,7 @@ router.get('/connections', authenticateToken, async (req, res) => {
 
     res.json({ connections: enhancedConnections });
   } catch (error) {
-    console.error('Get connections error:', error);
+    logger.error('Get connections error:', error);
     res.status(500).json({ error: 'Failed to fetch connections' });
   }
 });
@@ -64,12 +64,12 @@ router.get('/connections/:id', authenticateToken, async (req, res) => {
 
     res.json({ connection });
   } catch (error) {
-    console.error('Get connection details error:', error);
+    logger.error('Get connection details error:', error);
     res.status(500).json({ error: 'Failed to fetch connection details' });
   }
 });
 
-// NEW: Get real-time positions from broker
+// Get real-time positions from broker
 router.get('/positions/:connectionId', authenticateToken, async (req, res) => {
   try {
     const { connectionId } = req.params;
@@ -203,7 +203,7 @@ router.get('/positions/:connectionId', authenticateToken, async (req, res) => {
   }
 });
 
-// NEW: Get real-time holdings from broker
+// Get real-time holdings from broker
 router.get('/holdings/:connectionId', authenticateToken, async (req, res) => {
   try {
     const { connectionId } = req.params;
@@ -337,7 +337,7 @@ router.post('/connect', authenticateToken, async (req, res) => {
   try {
     const { brokerName, apiKey, apiSecret, userId, connectionName } = req.body;
 
-    console.log('📡 Broker connection request:', { brokerName, userId, connectionName, hasApiKey: !!apiKey, hasApiSecret: !!apiSecret });
+    logger.info('Broker connection request:', { brokerName, userId, connectionName });
 
     if (!brokerName || !apiKey || !apiSecret) {
       return res.status(400).json({ error: 'Broker name, API key, and API secret are required' });
@@ -358,7 +358,7 @@ router.post('/connect', authenticateToken, async (req, res) => {
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const webhookUrl = `${baseUrl}/api/webhook/${req.user.id}/${webhookId}`;
 
-    console.log('🔗 Generated webhook URL:', webhookUrl);
+    logger.info('Generated webhook URL:', webhookUrl);
 
     // Generate connection name if not provided
     const finalConnectionName = connectionName || `${brokerName} Connection ${Date.now()}`;
@@ -384,21 +384,22 @@ router.post('/connect', authenticateToken, async (req, res) => {
       `, [req.user.id, brokerName.toLowerCase(), finalConnectionName, encryptedApiKey, encryptedApiSecret, userId, webhookUrl]);
       
       connectionId = result.lastID;
-      console.log('✅ Created new broker connection:', connectionId);
+      logger.info('Created new broker connection:', connectionId);
     } catch (encryptionError) {
-      console.error('❌ Encryption error:', encryptionError);
+      logger.error('Encryption error:', encryptionError);
       return res.status(500).json({ error: 'Failed to encrypt credentials. Please try again.' });
     }
 
     // For Zerodha, generate login URL with proper redirect URL
     if (brokerName.toLowerCase() === 'zerodha') {
       try {
-        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback?connection_id=${connectionId}`;
+        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback`;
+        const state = JSON.stringify({ connection_id: connectionId });
         
         // Generate Zerodha login URL
-        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}`;
+        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
         
-        console.log('🔐 Generated Zerodha login URL for connection:', connectionId);
+        logger.info('Generated Zerodha login URL for connection:', connectionId);
         
         res.json({ 
           message: 'Broker credentials stored. Please complete authentication.',
@@ -410,17 +411,18 @@ router.post('/connect', authenticateToken, async (req, res) => {
           connectionName: finalConnectionName
         });
       } catch (error) {
-        console.error('❌ Failed to generate login URL:', error);
+        logger.error('Failed to generate login URL:', error);
         res.status(400).json({ error: 'Invalid API key or failed to generate login URL' });
       }
     } else if (brokerName.toLowerCase() === 'upstox') {
       try {
-        const redirectUrl = `${baseUrl}/api/broker/auth/upstox/callback?connection_id=${connectionId}`;
+        const redirectUrl = `${baseUrl}/api/broker/auth/upstox/callback`;
+        const state = JSON.stringify({ connection_id: connectionId });
         
         // Generate Upstox login URL
-        const loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${apiKey}&redirect_uri=${encodeURIComponent(redirectUrl)}`;
+        const loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${apiKey}&redirect_uri=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
         
-        console.log('🔐 Generated Upstox login URL for connection:', connectionId);
+        logger.info('Generated Upstox login URL for connection:', connectionId);
         
         res.json({ 
           message: 'Broker credentials stored. Please complete authentication.',
@@ -432,12 +434,12 @@ router.post('/connect', authenticateToken, async (req, res) => {
           connectionName: finalConnectionName
         });
       } catch (error) {
-        console.error('❌ Failed to generate Upstox login URL:', error);
+        logger.error('Failed to generate Upstox login URL:', error);
         res.status(400).json({ error: 'Invalid API key or failed to generate login URL' });
       }
     } else {
       // For other brokers, mark as connected (mock implementation)
-      console.log('✅ Connected to broker:', brokerName);
+      logger.info('Connected to broker:', brokerName);
       res.json({ 
         message: 'Broker connected successfully',
         connectionId,
@@ -447,43 +449,30 @@ router.post('/connect', authenticateToken, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('❌ Connect broker error:', error);
+    logger.error('Connect broker error:', error);
     res.status(500).json({ error: 'Failed to connect broker. Please check your credentials and try again.' });
   }
 });
 
-// NEW: Reconnect using stored credentials - generates new access token directly
+// Reconnect using stored credentials - generates new access token directly
 router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
   try {
     const { connectionId } = req.params;
-    console.log('--- Step 1: Incoming Request ---');
-    console.log('Input - connectionId:', connectionId);
-    console.log('Input - req.user.id (from authenticateToken):', req.user ? req.user.id : 'N/A');
-
-    logger.info('🔄 Reconnecting using stored credentials for connection:', connectionId);
+    
+    logger.info('Reconnecting using stored credentials for connection:', connectionId);
 
     // Get connection details with encrypted credentials
-    console.log('--- Step 2: Fetching Connection Details from DB ---');
-    console.log('DB Query: SELECT * FROM broker_connections WHERE id = ? AND user_id = ?');
-    console.log('DB Parameters:', [connectionId, req.user.id]);
     const connection = await db.getAsync(
-      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? ',
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ?',
       [connectionId, req.user.id]
     );
-    console.log('Output - connection from DB:', connection);
 
     if (!connection) {
-      console.log('--- Step 3: Connection Not Found/Inactive ---');
-      console.log('Output - Response: 404 Not Found, error: Broker connection not found or inactive');
       return res.status(404).json({ error: 'Broker connection not found or inactive' });
     }
 
     // Check if we have the required credentials
-    console.log('--- Step 4: Checking for API Credentials ---');
-    console.log('Input - connection.api_key:', connection.api_key ? 'Present' : 'Missing');
-    console.log('Input - connection.api_secret:', connection.api_secret ? 'Present' : 'Missing');
     if (!connection.api_key || !connection.api_secret) {
-      console.log('Output - Response: 400 Bad Request, error: Missing API credentials');
       return res.status(400).json({
         error: 'Missing API credentials. Please update your connection settings.',
         needsCredentials: true
@@ -492,32 +481,23 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
 
     try {
       // Decrypt stored credentials
-      console.log('--- Step 5: Decrypting Credentials ---');
-      console.log('Input - connection.api_key (encrypted):', connection.api_key);
-      console.log('Input - connection.api_secret (encrypted):', connection.api_secret);
       const apiKey = decryptData(connection.api_key);
       const apiSecret = decryptData(connection.api_secret);
-      console.log('Output - apiKey (decrypted):', apiKey ? 'Decrypted Successfully' : 'Decryption Failed');
-      console.log('Output - apiSecret (decrypted):', apiSecret ? 'Decrypted Successfully' : 'Decryption Failed');
+      
+      logger.info('Using stored credentials to reconnect');
 
-      logger.info('🔐 Using stored credentials to reconnect');
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const state = JSON.stringify({ 
+        connection_id: connectionId,
+        reconnect: true 
+      });
 
-      console.log('--- Step 6: Checking Broker Type ---');
-      console.log('Input - connection.broker_name:', connection.broker_name);
       if (connection.broker_name.toLowerCase() === 'zerodha') {
-        // For Zerodha, we need user to login again to get new request token
-        // This is because Zerodha's access tokens are session-based
-        console.log('--- Step 6a: Handling Zerodha Reconnection ---');
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        console.log('Calculated baseUrl:', baseUrl);
-        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback?connection_id=${connectionId}&reconnect=true`;
-        console.log('Calculated redirectUrl:', redirectUrl);
-        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}`;
-        console.log('Generated Zerodha loginUrl:', loginUrl);
+        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback`;
+        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
 
-        logger.info('🔐 Generated reconnection login URL for Zerodha connection:', connectionId);
+        logger.info('Generated reconnection login URL for Zerodha connection:', connectionId);
 
-        console.log('Output - Response: 200 OK, message: Please complete authentication..., loginUrl:', loginUrl);
         res.json({
           message: 'Please complete authentication to reconnect your Zerodha account.',
           loginUrl,
@@ -526,16 +506,10 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           brokerName: 'Zerodha'
         });
       } else if (connection.broker_name.toLowerCase() === 'upstox') {
-        // For Upstox, similar OAuth flow
-        console.log('--- Step 6b: Handling Upstox Reconnection ---');
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        console.log('Calculated baseUrl:', baseUrl);
-        const redirectUrl = `${baseUrl}/api/broker/auth/upstox/callback?connection_id=${connectionId}&reconnect=true`;
-        console.log('Calculated redirectUrl:', redirectUrl);
-        const loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${apiKey}&redirect_uri=${encodeURIComponent(redirectUrl)}`;
-        console.log('Generated Upstox loginUrl:', loginUrl);
+        const redirectUrl = `${baseUrl}/api/broker/auth/upstox/callback`;
+        const loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${apiKey}&redirect_uri=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
 
-        logger.info('🔐 Generated reconnection login URL for Upstox connection:', connectionId);
+        logger.info('Generated reconnection login URL for Upstox connection:', connectionId);
 
         res.json({
           message: 'Please complete authentication to reconnect your Upstox account.',
@@ -545,10 +519,6 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           brokerName: 'Upstox'
         });
       } else {
-        // For other brokers, implement direct token refresh if supported
-        // This is where you'd implement direct API calls for other brokers
-        console.log('--- Step 6c: Handling Other Brokers (Not Supported Yet) ---');
-        console.log('Output - Response: 400 Bad Request, error: Direct reconnection not supported');
         return res.status(400).json({
           error: 'Direct reconnection not supported for this broker. Please update your connection.',
           brokerName: connection.broker_name
@@ -556,10 +526,7 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
       }
 
     } catch (decryptError) {
-      console.log('--- Step 7: Decryption Error ---');
-      console.log('Input - decryptError:', decryptError.message);
-      logger.error('❌ Failed to decrypt stored credentials:', decryptError);
-      console.log('Output - Response: 500 Internal Server Error, error: Failed to decrypt stored credentials');
+      logger.error('Failed to decrypt stored credentials:', decryptError);
       return res.status(500).json({
         error: 'Failed to decrypt stored credentials. Please update your connection settings.',
         needsCredentials: true
@@ -567,66 +534,17 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
     }
 
   } catch (error) {
-    console.log('--- Step 8: General Reconnect Error ---');
-    console.log('Input - error:', error.message);
-    logger.error('❌ Reconnect error:', error);
-    console.log('Output - Response: 500 Internal Server Error, error: Failed to reconnect');
+    logger.error('Reconnect error:', error);
     res.status(500).json({ error: 'Failed to reconnect. Please try again.' });
   }
 });
 
-// DEPRECATED: Old refresh token method (keeping for backward compatibility)
-router.post('/refresh-token/:connectionId', authenticateToken, async (req, res) => {
-  try {
-    const { connectionId } = req.params;
-    
-    logger.info('🔄 [DEPRECATED] Refresh token called, redirecting to reconnect');
-    
-    // Call the reconnect endpoint directly
-    const connection = await db.getAsync(
-      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
-      [connectionId, req.user.id]
-    );
-
-    if (!connection) {
-      return res.status(404).json({ error: 'Broker connection not found or inactive' });
-    }
-
-    if (!connection.api_key || !connection.api_secret) {
-      return res.status(400).json({ 
-        error: 'Missing API credentials. Please update your connection settings.',
-        needsCredentials: true 
-      });
-    }
-
-    try {
-      const apiKey = decryptData(connection.api_key);
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
-      const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback?connection_id=${connectionId}&reconnect=true`;
-      const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}`;
-      
-      res.json({ 
-        message: 'Please complete authentication to refresh your access token.',
-        loginUrl,
-        requiresAuth: true,
-        reconnect: true
-      });
-    } catch (error) {
-      return res.status(500).json({ error: 'Failed to generate refresh URL' });
-    }
-    
-  } catch (error) {
-    logger.error('❌ Refresh token error:', error);
-    res.status(500).json({ error: 'Failed to refresh access token' });
-  }
-});
-
-// Zerodha OAuth callback handler - This is the redirect URL endpoint
+// Zerodha OAuth callback handler
 router.get('/auth/zerodha/callback', async (req, res) => {
   try {
-    const { request_token, action, status, connection_id, reconnect } = req.query;
+    const { request_token, action, status, state } = req.query;
 
-    console.log('📡 Zerodha callback received:', { request_token, action, status, connection_id, reconnect });
+    logger.info('Zerodha callback received:', { request_token, action, status, state });
 
     // Check if authentication was successful
     if (action !== 'login' || status !== 'success' || !request_token) {
@@ -643,7 +561,27 @@ router.get('/auth/zerodha/callback', async (req, res) => {
       `);
     }
 
-    if (!connection_id) {
+    // Parse the state parameter
+    let connectionId, reconnect;
+    try {
+      const stateObj = JSON.parse(decodeURIComponent(state || '{}'));
+      connectionId = stateObj.connection_id;
+      reconnect = stateObj.reconnect;
+    } catch (e) {
+      logger.error('Failed to parse state:', e);
+      return res.status(400).send(`
+        <html>
+          <head><title>Invalid State</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: #dc3545;">❌ Invalid State Parameter</h1>
+            <p>Could not identify the connection. Please try again.</p>
+            <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
+          </body>
+        </html>
+      `);
+    }
+
+    if (!connectionId) {
       return res.status(400).send(`
         <html>
           <head><title>Missing Connection ID</title></head>
@@ -659,7 +597,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
     // Get broker connection
     const connection = await db.getAsync(
       'SELECT * FROM broker_connections WHERE id = ?',
-      [connection_id]
+      [connectionId]
     );
 
     if (!connection) {
@@ -680,7 +618,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
       const apiKey = decryptData(connection.api_key);
       const apiSecret = decryptData(connection.api_secret);
       
-      console.log('🔐 Generating access token for connection:', connection_id);
+      logger.info('Generating access token for connection:', connectionId);
       
       // Generate access token using KiteConnect
       const accessTokenResponse = await kiteService.generateAccessToken(apiKey, apiSecret, request_token);
@@ -704,14 +642,14 @@ router.get('/auth/zerodha/callback', async (req, res) => {
         UPDATE broker_connections 
         SET access_token = ?, public_token = ?, access_token_expires_at = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP 
         WHERE id = ?
-      `, [encryptData(accessToken), encryptData(publicToken), expiresAt, connection_id]);
+      `, [encryptData(accessToken), encryptData(publicToken), expiresAt, connectionId]);
 
       // Clear any cached KiteConnect instances to force refresh
-      kiteService.clearCachedInstance(connection_id);
+      kiteService.clearCachedInstance(connectionId);
 
-      console.log('✅ Zerodha authentication completed for connection:', connection_id);
+      logger.info('Zerodha authentication completed for connection:', connectionId);
 
-      const actionText = reconnect === 'true' ? 'Reconnection Successful' : 'Authentication Successful';
+      const actionText = reconnect ? 'Reconnection Successful' : 'Authentication Successful';
 
       // Return success page
       res.send(`
@@ -733,7 +671,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
               <div class="success-icon">✅</div>
               <h1 class="success-title">${actionText}!</h1>
               <p class="success-message">
-                Your Zerodha account has been successfully ${reconnect === 'true' ? 'reconnected' : 'connected'} to AutoTraderHub.<br>
+                Your Zerodha account has been successfully ${reconnect ? 'reconnected' : 'connected'} to AutoTraderHub.<br>
                 New access token expires: ${new Date(expiresAt * 1000).toLocaleString()}<br>
                 You can now close this window and return to the dashboard.
               </p>
@@ -750,7 +688,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
       `);
 
     } catch (authError) {
-      console.error('❌ Authentication error:', authError);
+      logger.error('Authentication error:', authError);
       res.status(500).send(`
         <html>
           <head><title>Authentication Error</title></head>
@@ -764,7 +702,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('❌ Callback handler error:', error);
+    logger.error('Callback handler error:', error);
     res.status(500).send(`
       <html>
         <head><title>Server Error</title></head>
@@ -773,7 +711,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
           <p>An unexpected error occurred: ${error.message}</p>
           <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
         </body>
-        </html>
+      </html>
     `);
   }
 });
@@ -781,11 +719,26 @@ router.get('/auth/zerodha/callback', async (req, res) => {
 // Upstox OAuth callback handler
 router.get('/auth/upstox/callback', async (req, res) => {
   try {
-    const { code, state, connection_id, reconnect } = req.query;
+    const { code, state, error, error_description } = req.query;
 
-    console.log('📡 Upstox callback received:', { code, state, connection_id, reconnect });
+    logger.info('Upstox callback received:', { code, state, error, error_description });
 
-    // Check if authentication was successful
+    // Check if authentication failed
+    if (error) {
+      return res.status(400).send(`
+        <html>
+          <head><title>Authentication Failed</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: #dc3545;">❌ Authentication Failed</h1>
+            <p>Upstox authentication was not successful.</p>
+            <p>Error: ${error_description || error || 'Unknown error'}</p>
+            <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
+          </body>
+        </html>
+      `);
+    }
+
+    // Check if we have the authorization code
     if (!code) {
       return res.status(400).send(`
         <html>
@@ -800,7 +753,27 @@ router.get('/auth/upstox/callback', async (req, res) => {
       `);
     }
 
-    if (!connection_id) {
+    // Parse the state parameter
+    let connectionId, reconnect;
+    try {
+      const stateObj = JSON.parse(decodeURIComponent(state || '{}'));
+      connectionId = stateObj.connection_id;
+      reconnect = stateObj.reconnect;
+    } catch (e) {
+      logger.error('Failed to parse state:', e);
+      return res.status(400).send(`
+        <html>
+          <head><title>Invalid State</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: #dc3545;">❌ Invalid State Parameter</h1>
+            <p>Could not identify the connection. Please try again.</p>
+            <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
+          </body>
+        </html>
+      `);
+    }
+
+    if (!connectionId) {
       return res.status(400).send(`
         <html>
           <head><title>Missing Connection ID</title></head>
@@ -816,7 +789,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
     // Get broker connection
     const connection = await db.getAsync(
       'SELECT * FROM broker_connections WHERE id = ?',
-      [connection_id]
+      [connectionId]
     );
 
     if (!connection) {
@@ -836,9 +809,9 @@ router.get('/auth/upstox/callback', async (req, res) => {
       // Decrypt credentials
       const apiKey = decryptData(connection.api_key);
       const apiSecret = decryptData(connection.api_secret);
-      const redirectUrl = `${req.protocol}://${req.get('host')}/api/broker/auth/upstox/callback?connection_id=${connection_id}`;
+      const redirectUrl = `${req.protocol}://${req.get('host')}/api/broker/auth/upstox/callback`;
       
-      console.log('🔐 Generating access token for Upstox connection:', connection_id);
+      logger.info('Generating access token for Upstox connection:', connectionId);
       
       // Generate access token using Upstox API
       const accessTokenResponse = await upstoxService.generateAccessToken(apiKey, apiSecret, code, redirectUrl);
@@ -860,14 +833,14 @@ router.get('/auth/upstox/callback', async (req, res) => {
         UPDATE broker_connections 
         SET access_token = ?, access_token_expires_at = ?, is_active = 1, is_authenticated = 1, updated_at = CURRENT_TIMESTAMP 
         WHERE id = ?
-      `, [encryptData(accessToken), expiresAt, connection_id]);
+      `, [encryptData(accessToken), expiresAt, connectionId]);
 
       // Clear any cached Upstox instances to force refresh
-      upstoxService.clearCachedInstance(connection_id);
+      upstoxService.clearCachedInstance(connectionId);
 
-      console.log('✅ Upstox authentication completed for connection:', connection_id);
+      logger.info('Upstox authentication completed for connection:', connectionId);
 
-      const actionText = reconnect === 'true' ? 'Reconnection Successful' : 'Authentication Successful';
+      const actionText = reconnect ? 'Reconnection Successful' : 'Authentication Successful';
 
       // Return success page
       res.send(`
@@ -889,7 +862,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
               <div class="success-icon">✅</div>
               <h1 class="success-title">${actionText}!</h1>
               <p class="success-message">
-                Your Upstox account has been successfully ${reconnect === 'true' ? 'reconnected' : 'connected'} to AutoTraderHub.<br>
+                Your Upstox account has been successfully ${reconnect ? 'reconnected' : 'connected'} to AutoTraderHub.<br>
                 Access token expires: ${new Date(expiresAt * 1000).toLocaleString()}<br>
                 You can now close this window and return to the dashboard.
               </p>
@@ -906,7 +879,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
       `);
 
     } catch (authError) {
-      console.error('❌ Upstox authentication error:', authError);
+      logger.error('Upstox authentication error:', authError);
       res.status(500).send(`
         <html>
           <head><title>Authentication Error</title></head>
@@ -920,7 +893,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('❌ Upstox callback handler error:', error);
+    logger.error('Upstox callback handler error:', error);
     res.status(500).send(`
       <html>
         <head><title>Server Error</title></head>
@@ -929,7 +902,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
           <p>An unexpected error occurred: ${error.message}</p>
           <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
         </body>
-        </html>
+      </html>
     `);
   }
 });
@@ -946,7 +919,7 @@ router.post('/disconnect', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Broker disconnected successfully' });
   } catch (error) {
-    console.error('Disconnect broker error:', error);
+    logger.error('Disconnect broker error:', error);
     res.status(500).json({ error: 'Failed to disconnect broker' });
   }
 });
@@ -967,7 +940,7 @@ router.delete('/connections/:id', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Broker connection deleted successfully' });
   } catch (error) {
-    console.error('Delete broker connection error:', error);
+    logger.error('Delete broker connection error:', error);
     res.status(500).json({ error: 'Failed to delete broker connection' });
   }
 });
@@ -995,7 +968,7 @@ router.post('/sync/positions/:connectionId', authenticateToken, async (req, res)
         positions: positions || []
       });
     } catch (syncError) {
-      console.error('Failed to sync positions from broker:', syncError);
+      logger.error('Failed to sync positions from broker:', syncError);
       // Return mock data if sync fails
       const mockPositions = [
         {
@@ -1022,7 +995,7 @@ router.post('/sync/positions/:connectionId', authenticateToken, async (req, res)
       });
     }
   } catch (error) {
-    console.error('Sync positions error:', error);
+    logger.error('Sync positions error:', error);
     res.status(500).json({ error: 'Failed to sync positions' });
   }
 });
@@ -1032,7 +1005,7 @@ router.post('/test/:connectionId', authenticateToken, async (req, res) => {
   try {
     const { connectionId } = req.params;
 
-    console.log('🧪 Testing connection for ID:', connectionId);
+    logger.info('Testing connection for ID:', connectionId);
 
     // Verify connection belongs to user
     const connection = await db.getAsync(
@@ -1081,7 +1054,7 @@ router.post('/test/:connectionId', authenticateToken, async (req, res) => {
       });
 
     } catch (testError) {
-      console.error('❌ Connection test failed:', testError);
+      logger.error('Connection test failed:', testError);
       
       // Check if it's a token-related error
       if (testError.message && (testError.message.includes('api_key') || testError.message.includes('access_token'))) {
@@ -1099,10 +1072,9 @@ router.post('/test/:connectionId', authenticateToken, async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Test connection error:', error);
+    logger.error('Test connection error:', error);
     res.status(500).json({ error: 'Broker connection test failed' });
   }
 });
-
 
 export default router;
