@@ -48,13 +48,10 @@ const BrokerConnection: React.FC = () => {
   const [editingConnection, setEditingConnection] = useState<BrokerConnection | null>(null);
   const [showEditForm, setShowEditForm] = useState(false);
   const [deletingConnection, setDeletingConnection] = useState<number | null>(null);
-  const [showAngelAuth, setShowAngelAuth] = useState<{connectionId: number, brokerName: string} | null>(null);
-  const [angelAuthData, setAngelAuthData] = useState({
-    clientCode: '',
-    password: '',
-    totp: ''
-  });
-  const [angelAuthLoading, setAngelAuthLoading] = useState(false);
+  const [showAngelAuth, setShowAngelAuth] = useState(false);
+  const [showShoonyaAuth, setShowShoonyaAuth] = useState(false);
+  const [angelAuthData, setAngelAuthData] = useState<{connectionId: number} | null>(null);
+  const [shoonyaAuthData, setShoonyaAuthData] = useState<{connectionId: number} | null>(null);
   
   const { register, handleSubmit, watch, reset, setValue, formState: { errors } } = useForm<BrokerConnectionForm>();
   const selectedBroker = watch('brokerName');
@@ -82,6 +79,14 @@ const BrokerConnection: React.FC = () => {
       logo: '👼', 
       description: 'Smart API with comprehensive trading solutions',
       features: ['Smart API', 'Real-time data', 'Multi-segment trading'],
+      authRequired: true
+    },
+    { 
+      id: 'shoonya', 
+      name: 'Shoonya', 
+      logo: '🚀', 
+      description: 'Advanced trading platform with low-cost brokerage',
+      features: ['Low brokerage', 'Advanced API', 'Multi-asset trading'],
       authRequired: true
     },
     { 
@@ -123,11 +128,14 @@ const BrokerConnection: React.FC = () => {
         });
         toast.success('Credentials saved! Please complete authentication.');
       } else if (response.data.requiresAuth && response.data.authType === 'credentials') {
-        // For Angel Broking, show manual authentication form
-        setShowAngelAuth({
-          connectionId: response.data.connectionId,
-          brokerName: data.brokerName
-        });
+        // Handle manual authentication for Angel/Shoonya
+        if (data.brokerName.toLowerCase() === 'angel') {
+          setAngelAuthData({ connectionId: response.data.connectionId });
+          setShowAngelAuth(true);
+        } else if (data.brokerName.toLowerCase() === 'shoonya') {
+          setShoonyaAuthData({ connectionId: response.data.connectionId });
+          setShowShoonyaAuth(true);
+        }
         toast.success('Credentials saved! Please complete authentication.');
       } else {
         toast.success('Broker connected successfully!');
@@ -218,31 +226,6 @@ const BrokerConnection: React.FC = () => {
     }
   };
 
-  const handleAngelAuth = async () => {
-    if (!showAngelAuth) return;
-    
-    setAngelAuthLoading(true);
-    try {
-      const response = await brokerAPI.angelAuth({
-        connectionId: showAngelAuth.connectionId,
-        clientCode: angelAuthData.clientCode,
-        password: angelAuthData.password,
-        totp: angelAuthData.totp
-      });
-      
-      if (response.data.success) {
-        toast.success('Angel Broking authentication successful!');
-        setShowAngelAuth(null);
-        setAngelAuthData({ clientCode: '', password: '', totp: '' });
-        fetchConnections();
-      }
-    } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Authentication failed');
-    } finally {
-      setAngelAuthLoading(false);
-    }
-  };
-
   const handleZerodhaAuth = (connectionId: number, loginUrl: string) => {
     setReconnectingConnection(connectionId);
     
@@ -283,14 +266,40 @@ const BrokerConnection: React.FC = () => {
       const response = await brokerAPI.reconnect(connectionId);
       
       if (response.data.loginUrl) {
-        toast.success(`Please complete authentication to reconnect your ${response.data.brokerName} account.`);
+        const authWindow = window.open(
+          response.data.loginUrl,
+          'reconnect-auth',
+          'width=600,height=700,scrollbars=yes,resizable=yes'
+        );
+
+        if (authWindow) {
+          const checkClosed = setInterval(() => {
+            if (authWindow.closed) {
+              clearInterval(checkClosed);
+              setTimeout(() => {
+                fetchConnections();
+              }, 2000);
+            }
+          }, 1000);
+
+          setTimeout(() => {
+            if (!authWindow.closed) {
+              authWindow.close();
+              clearInterval(checkClosed);
+            }
+          }, 300000);
+        } else {
+          toast.error('Failed to open authentication window. Please check your popup blocker.');
+        }
       } else if (response.data.authType === 'credentials') {
-        // For Angel Broking, show manual authentication form
-        setShowAngelAuth({
-          connectionId: connectionId,
-          brokerName: response.data.brokerName
-        });
-        toast.success(`Please complete authentication to reconnect your ${response.data.brokerName} account.`);
+        // Handle manual authentication for Angel/Shoonya
+        if (response.data.brokerName?.toLowerCase().includes('angel')) {
+          setAngelAuthData({ connectionId });
+          setShowAngelAuth(true);
+        } else if (response.data.brokerName?.toLowerCase().includes('shoonya')) {
+          setShoonyaAuthData({ connectionId });
+          setShowShoonyaAuth(true);
+        }
       } else {
         toast.success('Reconnected successfully using stored credentials!');
         fetchConnections();
@@ -317,6 +326,52 @@ const BrokerConnection: React.FC = () => {
         toast.error(error.response?.data?.error || 'Failed to reconnect. Please try again.');
       }
       setReconnectingConnection(null);
+    }
+  };
+
+  const handleAngelAuth = async (authData: any) => {
+    if (!angelAuthData) return;
+    
+    try {
+      setIsSubmitting(true);
+      const response = await brokerAPI.angelAuth({
+        connectionId: angelAuthData.connectionId,
+        ...authData
+      });
+      
+      if (response.data.success) {
+        toast.success('Angel Broking authentication successful!');
+        setShowAngelAuth(false);
+        setAngelAuthData(null);
+        fetchConnections();
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Angel authentication failed');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleShoonyaAuth = async (authData: any) => {
+    if (!shoonyaAuthData) return;
+    
+    try {
+      setIsSubmitting(true);
+      const response = await brokerAPI.shoonyaAuth({
+        connectionId: shoonyaAuthData.connectionId,
+        ...authData
+      });
+      
+      if (response.data.success) {
+        toast.success('Shoonya authentication successful!');
+        setShowShoonyaAuth(false);
+        setShoonyaAuthData(null);
+        fetchConnections();
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Shoonya authentication failed');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -806,99 +861,31 @@ const BrokerConnection: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Angel Broking Authentication Modal */}
+      {/* Angel Authentication Modal */}
       <AnimatePresence>
-        {showAngelAuth && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-2xl p-6 max-w-md w-full border border-beige-200 shadow-3d"
-            >
-              <h3 className="text-xl font-bold text-bronze-800 mb-4">Angel Broking Authentication</h3>
-              <p className="text-bronze-600 mb-6">
-                Enter your Angel Broking credentials to complete the authentication.
-              </p>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-bronze-700 mb-2">
-                    Client Code
-                  </label>
-                  <input
-                    type="text"
-                    value={angelAuthData.clientCode}
-                    onChange={(e) => setAngelAuthData(prev => ({ ...prev, clientCode: e.target.value }))}
-                    className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                    placeholder="Enter your client code"
-                  />
-                </div>
+        {showAngelAuth && angelAuthData && (
+          <AngelAuthModal
+            onSubmit={handleAngelAuth}
+            onClose={() => {
+              setShowAngelAuth(false);
+              setAngelAuthData(null);
+            }}
+            isLoading={isSubmitting}
+          />
+        )}
+      </AnimatePresence>
 
-                <div>
-                  <label className="block text-sm font-medium text-bronze-700 mb-2">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    value={angelAuthData.password}
-                    onChange={(e) => setAngelAuthData(prev => ({ ...prev, password: e.target.value }))}
-                    className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                    placeholder="Enter your password"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-bronze-700 mb-2">
-                    TOTP (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={angelAuthData.totp}
-                    onChange={(e) => setAngelAuthData(prev => ({ ...prev, totp: e.target.value }))}
-                    className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                    placeholder="Enter TOTP if enabled"
-                  />
-                </div>
-
-                <div className="flex space-x-4">
-                  <motion.button
-                    onClick={handleAngelAuth}
-                    disabled={angelAuthLoading || !angelAuthData.clientCode || !angelAuthData.password}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium hover:shadow-3d-hover transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-3d"
-                  >
-                    {angelAuthLoading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span>Authenticating...</span>
-                      </>
-                    ) : (
-                      <span>Authenticate</span>
-                    )}
-                  </motion.button>
-
-                  <motion.button
-                    onClick={() => {
-                      setShowAngelAuth(null);
-                      setAngelAuthData({ clientCode: '', password: '', totp: '' });
-                    }}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="px-6 py-3 bg-beige-100 text-bronze-700 rounded-xl font-medium hover:bg-beige-200 transition-colors border border-beige-200"
-                  >
-                    Cancel
-                  </motion.button>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
+      {/* Shoonya Authentication Modal */}
+      <AnimatePresence>
+        {showShoonyaAuth && shoonyaAuthData && (
+          <ShoonyaAuthModal
+            onSubmit={handleShoonyaAuth}
+            onClose={() => {
+              setShowShoonyaAuth(false);
+              setShoonyaAuthData(null);
+            }}
+            isLoading={isSubmitting}
+          />
         )}
       </AnimatePresence>
 
@@ -1205,6 +1192,195 @@ const BrokerConnection: React.FC = () => {
         )}
       </AnimatePresence>
     </div>
+  );
+};
+
+// Angel Authentication Modal Component
+const AngelAuthModal: React.FC<{
+  onSubmit: (data: any) => void;
+  onClose: () => void;
+  isLoading: boolean;
+}> = ({ onSubmit, onClose, isLoading }) => {
+  const { register, handleSubmit, formState: { errors } } = useForm();
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+    >
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-white rounded-2xl p-6 max-w-md w-full border border-beige-200 shadow-3d"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold text-bronze-800">Angel Broking Authentication</h3>
+          <button onClick={onClose} className="text-bronze-600 hover:text-bronze-500">✕</button>
+        </div>
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">Client Code</label>
+            <input
+              {...register('clientCode', { required: 'Client code is required' })}
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter your client code"
+            />
+            {errors.clientCode && <p className="text-red-600 text-sm mt-1">{errors.clientCode.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">Password</label>
+            <input
+              {...register('password', { required: 'Password is required' })}
+              type="password"
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter your password"
+            />
+            {errors.password && <p className="text-red-600 text-sm mt-1">{errors.password.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">TOTP (Optional)</label>
+            <input
+              {...register('totp')}
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter TOTP if enabled"
+            />
+          </div>
+
+          <div className="flex space-x-4">
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium disabled:opacity-50"
+            >
+              {isLoading ? 'Authenticating...' : 'Authenticate'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-6 py-3 bg-beige-100 text-bronze-700 rounded-xl font-medium"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+// Shoonya Authentication Modal Component
+const ShoonyaAuthModal: React.FC<{
+  onSubmit: (data: any) => void;
+  onClose: () => void;
+  isLoading: boolean;
+}> = ({ onSubmit, onClose, isLoading }) => {
+  const { register, handleSubmit, formState: { errors } } = useForm();
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+    >
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-white rounded-2xl p-6 max-w-md w-full border border-beige-200 shadow-3d max-h-[90vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold text-bronze-800">Shoonya Authentication</h3>
+          <button onClick={onClose} className="text-bronze-600 hover:text-bronze-500">✕</button>
+        </div>
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">User ID</label>
+            <input
+              {...register('userId', { required: 'User ID is required' })}
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter your user ID"
+            />
+            {errors.userId && <p className="text-red-600 text-sm mt-1">{errors.userId.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">Password</label>
+            <input
+              {...register('password', { required: 'Password is required' })}
+              type="password"
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter your password"
+            />
+            {errors.password && <p className="text-red-600 text-sm mt-1">{errors.password.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">2FA/TOTP</label>
+            <input
+              {...register('twoFA', { required: '2FA is required' })}
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter 2FA/TOTP code"
+            />
+            {errors.twoFA && <p className="text-red-600 text-sm mt-1">{errors.twoFA.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">Vendor Code</label>
+            <input
+              {...register('vendorCode', { required: 'Vendor code is required' })}
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter vendor code"
+            />
+            {errors.vendorCode && <p className="text-red-600 text-sm mt-1">{errors.vendorCode.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">API Secret</label>
+            <input
+              {...register('apiSecret', { required: 'API secret is required' })}
+              type="password"
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter API secret"
+            />
+            {errors.apiSecret && <p className="text-red-600 text-sm mt-1">{errors.apiSecret.message}</p>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-bronze-700 mb-2">IMEI (Optional)</label>
+            <input
+              {...register('imei')}
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              placeholder="Enter IMEI (optional)"
+            />
+          </div>
+
+          <div className="flex space-x-4">
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium disabled:opacity-50"
+            >
+              {isLoading ? 'Authenticating...' : 'Authenticate'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-6 py-3 bg-beige-100 text-bronze-700 rounded-xl font-medium"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </motion.div>
   );
 };
 

@@ -135,6 +135,19 @@ export const brokerAPI = {
       throw error;
     }
   },
+  
+  // Shoonya manual authentication
+  shoonyaAuth: async (data) => {
+    try {
+      console.log('🚀 Shoonya manual authentication for connection:', data.connectionId);
+      const response = await api.post('/broker/auth/shoonya/login', data);
+      console.log('✅ Shoonya authentication successful:', response.data);
+      return response;
+    } catch (error) {
+      console.error('❌ Shoonya authentication failed:', error);
+      throw error;
+    }
+  },
 };
 
 // Enhanced Orders API - Updated for Node.js Express endpoints
