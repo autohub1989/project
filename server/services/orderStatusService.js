@@ -2,6 +2,7 @@ import { db } from '../database/init.js';
 import kiteService from './kiteService.js';
 import upstoxService from './upstoxService.js';
 import angelService from './angelService.js';
+import shoonyaService from './shoonyaService.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('ORDER_STATUS_SERVICE');
@@ -87,6 +88,8 @@ class OrderStatusService {
         brokerOrderData = await upstoxService.getOrderStatus(brokerConnectionId, brokerOrderId);
       } else if (brokerConnection.broker_name.toLowerCase() === 'angel') {
         brokerOrderData = await angelService.getOrderStatus(brokerConnectionId, brokerOrderId);
+      } else if (brokerConnection.broker_name.toLowerCase() === 'shoonya') {
+        brokerOrderData = await shoonyaService.getOrderStatus(brokerConnectionId, brokerOrderId);
       } else {
         // For other brokers, implement their specific API calls
         logger.warn(`Order status polling not implemented for ${brokerConnection.broker_name}`);
@@ -123,6 +126,9 @@ class OrderStatusService {
               } else if (brokerConnection.broker_name.toLowerCase() === 'angel') {
                 // Angel position sync would be implemented here
                 // await angelService.syncPositions(brokerConnectionId);
+              } else if (brokerConnection.broker_name.toLowerCase() === 'shoonya') {
+                // Shoonya position sync would be implemented here
+                // await shoonyaService.syncPositions(brokerConnectionId);
               }
               logger.info(`Positions synced after order ${orderId} completion`);
             } catch (syncError) {

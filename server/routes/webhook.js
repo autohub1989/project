@@ -4,6 +4,7 @@ import { subscriptionAPI } from '../services/subscriptionService.js';
 import kiteService from '../services/kiteService.js';
 import upstoxService from '../services/upstoxService.js';
 import angelService from '../services/angelService.js';
+import shoonyaService from '../services/shoonyaService.js';
 import orderStatusService from '../services/orderStatusService.js';
 import createLogger from '../utils/logger.js';
 
@@ -83,6 +84,25 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
       stoploss: ['SL', 'SL-M'].includes(payload.order_type) ? parseFloat(payload.trigger_price || 0).toString() : '0',
       quantity: parseInt(payload.quantity)
     };
+  } else if (brokerName.toLowerCase() === 'shoonya') {
+    // For Shoonya, we need tsym and specific format
+    formatted = {
+      exch: payload.exchange || 'NSE',
+      tsym: symbolStr,
+      qty: parseInt(payload.quantity),
+      prc: payload.order_type === 'LMT' ? parseFloat(payload.price || 0).toString() : '0',
+      prd: payload.product === 'MIS' ? 'I' : (payload.product === 'CNC' ? 'C' : 'I'), // I=Intraday, C=CNC, M=Margin
+      trantype: payload.action.toUpperCase() === 'BUY' ? 'B' : 'S', // B=Buy, S=Sell
+      prctyp: payload.order_type === 'LIMIT' ? 'LMT' : 'MKT', // MKT=Market, LMT=Limit
+      ret: payload.validity || 'DAY', // DAY, IOC, EOS
+      ordersource: 'API'
+    };
+    
+    // Add trigger price for stop loss orders
+    if (['SL', 'SL-M'].includes(payload.order_type) && payload.trigger_price) {
+      formatted.prctyp = payload.order_type === 'SL' ? 'SL-LMT' : 'SL-MKT';
+      formatted.trgprc = parseFloat(payload.trigger_price).toString();
+    }
   } else {
     // Default format for other brokers
     formatted = {
@@ -242,6 +262,13 @@ router.post('/:userId/:webhookId', async (req, res) => {
         debugLogs.push(`🔍 Clean orderParams being sent to angelService: ${JSON.stringify(cleanOrderParams)}`);
         
         brokerResponse = await angelService.placeOrder(brokerConnection.id, cleanOrderParams);
+      } else if (brokerConnection.broker_name.toLowerCase() === 'shoonya') {
+        // Create a clean copy of orderParams for Shoonya
+        const cleanOrderParams = { ...orderParams };
+        console.log('🔍 Clean orderParams being sent to shoonyaService:', JSON.stringify(cleanOrderParams, null, 2));
+        debugLogs.push(`🔍 Clean orderParams being sent to shoonyaService: ${JSON.stringify(cleanOrderParams)}`);
+        
+        brokerResponse = await shoonyaService.placeOrder(brokerConnection.id, cleanOrderParams);
       } else {
         brokerResponse = { success: true, order_id: `MOCK_${Date.now()}`, data: { status: 'COMPLETE' } };
       }
@@ -277,6 +304,9 @@ router.post('/:userId/:webhookId', async (req, res) => {
           } else if (brokerConnection.broker_name.toLowerCase() === 'angel') {
             // Angel position sync would be implemented here
             // await angelService.syncPositions(brokerConnection.id);
+          } else if (brokerConnection.broker_name.toLowerCase() === 'shoonya') {
+            // Shoonya position sync would be implemented here
+            // await shoonyaService.syncPositions(brokerConnection.id);
           }
           debugLogs.push('🔄 Positions synced successfully.');
         } catch (syncError) {

@@ -6,6 +6,7 @@ import { encryptData, decryptData, testEncryption } from '../utils/encryption.js
 import kiteService from '../services/kiteService.js';
 import upstoxService from '../services/upstoxService.js';
 import angelService from '../services/angelService.js';
+import shoonyaService from '../services/shoonyaService.js';
 import createLogger from '../utils/logger.js';
 
 const logger = createLogger('BrokerHandler');
@@ -448,6 +449,16 @@ router.post('/connect', authenticateToken, async (req, res) => {
         authType: 'credentials', // Indicates manual credential entry
         connectionName: finalConnectionName
       });
+    } else if (brokerName.toLowerCase() === 'shoonya') {
+      // For Shoonya, we need additional credentials (user ID, password, 2FA, vendor code, API secret)
+      res.json({ 
+        message: 'Shoonya credentials stored. Additional authentication required.',
+        connectionId,
+        webhookUrl,
+        requiresAuth: true,
+        authType: 'credentials', // Indicates manual credential entry
+        connectionName: finalConnectionName
+      });
     } else {
       // For other brokers, mark as connected (mock implementation)
       logger.info('Connected to broker:', brokerName);
@@ -538,6 +549,16 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           authType: 'credentials',
           reconnect: true,
           brokerName: 'Angel Broking'
+        });
+      } else if (connection.broker_name.toLowerCase() === 'shoonya') {
+        logger.info('Shoonya reconnection requires manual authentication');
+
+        res.json({
+          message: 'Please complete authentication to reconnect your Shoonya account.',
+          requiresAuth: true,
+          authType: 'credentials',
+          reconnect: true,
+          brokerName: 'Shoonya'
         });
       } else {
         return res.status(400).json({
@@ -1008,6 +1029,88 @@ router.post('/auth/angel/login', async (req, res) => {
   }
 });
 
+// Shoonya manual authentication endpoint
+router.post('/auth/shoonya/login', async (req, res) => {
+  try {
+    const { connectionId, userId, password, twoFA, vendorCode, apiSecret, imei } = req.body;
+
+    logger.info('Shoonya manual authentication:', { connectionId, userId });
+
+    if (!connectionId || !userId || !password || !vendorCode || !apiSecret) {
+      return res.status(400).json({ 
+        error: 'Connection ID, user ID, password, vendor code, and API secret are required' 
+      });
+    }
+
+    // Get broker connection
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ?',
+      [connectionId]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found' });
+    }
+
+    try {
+      // Decrypt credentials
+      const apiKey = decryptData(connection.api_key);
+      
+      logger.info('Generating session token for Shoonya connection:', connectionId);
+      
+      // Generate session token using Shoonya API
+      const sessionResponse = await shoonyaService.generateSessionToken(
+        apiKey, userId, password, twoFA, vendorCode, apiSecret, imei
+      );
+      
+      if (!sessionResponse || !sessionResponse.session_token) {
+        throw new Error('Failed to generate session token');
+      }
+
+      const sessionToken = sessionResponse.session_token;
+      
+      // Set token expiry (Shoonya tokens typically expire at end of trading day)
+      const now = new Date();
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999); // End of day
+      const expiresAt = Math.floor(endOfDay.getTime() / 1000);
+
+      // Store session token and user ID
+      await db.runAsync(`
+        UPDATE broker_connections 
+        SET access_token = ?, user_id_broker = ?, access_token_expires_at = ?, is_active = 1, is_authenticated = 1, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = ?
+      `, [encryptData(sessionToken), userId, expiresAt, connectionId]);
+
+      // Clear any cached Shoonya instances to force refresh
+      shoonyaService.clearCachedInstance(connectionId);
+
+      logger.info('Shoonya authentication completed for connection:', connectionId);
+
+      res.json({
+        success: true,
+        message: 'Shoonya authentication successful',
+        connectionId,
+        expiresAt: new Date(expiresAt * 1000).toISOString()
+      });
+
+    } catch (authError) {
+      logger.error('Shoonya authentication error:', authError);
+      res.status(500).json({
+        error: 'Authentication failed',
+        message: authError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Shoonya manual authentication error:', error);
+    res.status(500).json({
+      error: 'Authentication failed',
+      message: error.message
+    });
+  }
+});
+
 // Disconnect broker
 router.post('/disconnect', authenticateToken, async (req, res) => {
   try {
@@ -1146,6 +1249,9 @@ router.post('/test/:connectionId', authenticateToken, async (req, res) => {
       } else if (connection.broker_name.toLowerCase() === 'angel') {
         // Test connection using AngelService
         testResult = await angelService.getProfile(connectionId);
+      } else if (connection.broker_name.toLowerCase() === 'shoonya') {
+        // Test connection using ShoonyaService
+        testResult = await shoonyaService.getProfile(connectionId);
       } else {
         return res.status(400).json({ error: 'Unsupported broker' });
       }
