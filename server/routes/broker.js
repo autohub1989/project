@@ -1022,59 +1022,115 @@ router.post('/auth/shoonya/login', async (req, res) => {
   try {
     const { connectionId, userId, password, twoFA, vendorCode, apiSecret, imei } = req.body;
 
-    logger.info('Shoonya manual authentication:', { connectionId, userId });
+    logger.info('🔐 Shoonya manual authentication request received', {
+      connectionId,
+      userId,
+      twoFA,
+      vendorCode,
+      hasPassword: !!password,
+      hasApiSecret: !!apiSecret,
+      imei
+    });
 
+    // Basic input validation
     if (!connectionId || !userId || !password || !vendorCode || !apiSecret) {
-      return res.status(400).json({ 
-        error: 'Connection ID, user ID, password, vendor code, and API secret are required' 
+      logger.warn('⚠️ Missing required credentials in Shoonya auth request', req.body);
+      return res.status(400).json({
+        error: 'Connection ID, user ID, password, vendor code, and API secret are required'
       });
     }
 
-    // Get broker connection
-    const connection = await db.getAsync(
-      'SELECT * FROM broker_connections WHERE id = ?',
-      [connectionId]
-    );
+    // Fetch broker connection from DB
+    let connection;
+    try {
+      connection = await db.getAsync('SELECT * FROM broker_connections WHERE id = ?', [connectionId]);
+      logger.info('✅ Fetched broker connection', connection);
+    } catch (dbErr) {
+      logger.error('❌ Database error while fetching broker connection', dbErr);
+      return res.status(500).json({
+        error: 'Failed to fetch broker connection',
+        message: dbErr.message
+      });
+    }
 
     if (!connection) {
+      logger.warn('❗ Broker connection not found for ID:', connectionId);
       return res.status(404).json({ error: 'Broker connection not found' });
     }
 
     try {
-      // Decrypt credentials
-      const apiKey = decryptData(connection.api_key);
-      
-      logger.info('Generating session token for Shoonya connection:', connectionId);
-      
-      // Generate session token using Shoonya API
-      const sessionResponse = await shoonyaService.generateSessionToken(
-        apiKey, userId, password, twoFA, vendorCode, apiSecret, imei
-      );
-      
+      // Decrypt API key
+      let apiKey;
+      try {
+        apiKey = decryptData(connection.api_key);
+        logger.info('🔑 API Key decrypted successfully');
+      } catch (decryptErr) {
+        logger.error('❌ Failed to decrypt API key', decryptErr);
+        throw new Error('Invalid or corrupted API key');
+      }
+
+      // Attempt to generate session token using Shoonya API
+      logger.info('📡 Sending credentials to Shoonya API...');
+      let sessionResponse;
+      try {
+        sessionResponse = await shoonyaService.generateSessionToken(
+          apiKey,
+          userId,
+          password,
+          twoFA,
+          vendorCode,
+          apiSecret,
+          imei
+        );
+        logger.info('✅ Received response from Shoonya API', sessionResponse);
+      } catch (apiError) {
+        logger.error('❌ Shoonya API call failed', {
+          message: apiError.message,
+          stack: apiError.stack,
+          response: apiError.response?.data || null
+        });
+        throw new Error('Shoonya API authentication failed');
+      }
+
       if (!sessionResponse || !sessionResponse.session_token) {
+        logger.error('❌ Invalid session response from Shoonya API', sessionResponse);
         throw new Error('Failed to generate session token');
       }
 
       const sessionToken = sessionResponse.session_token;
-      
-      // Set token expiry (Shoonya tokens typically expire at end of trading day)
+
+      // Calculate end-of-day expiry
       const now = new Date();
       const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999); // End of day
+      endOfDay.setHours(23, 59, 59, 999);
       const expiresAt = Math.floor(endOfDay.getTime() / 1000);
 
-      // Store session token and user ID
-      await db.runAsync(`
-        UPDATE broker_connections 
-        SET access_token = ?, user_id_broker = ?, access_token_expires_at = ?, is_active = 1, is_authenticated = 1, updated_at = CURRENT_TIMESTAMP 
-        WHERE id = ?
-      `, [encryptData(sessionToken), userId, expiresAt, connectionId]);
+      logger.info('🗓️ Session token expires at:', new Date(expiresAt * 1000).toISOString());
 
-      // Clear any cached Shoonya instances to force refresh
-      shoonyaService.clearCachedInstance(connectionId);
+      // Update database with session token
+      try {
+        await db.runAsync(`
+          UPDATE broker_connections 
+          SET access_token = ?, user_id_broker = ?, access_token_expires_at = ?, 
+              is_active = 1, is_authenticated = 1, updated_at = CURRENT_TIMESTAMP 
+          WHERE id = ?
+        `, [encryptData(sessionToken), userId, expiresAt, connectionId]);
 
-      logger.info('Shoonya authentication completed for connection:', connectionId);
+        logger.info('✅ Updated broker connection with session token');
+      } catch (dbUpdateError) {
+        logger.error('❌ Failed to update broker connection with session token', dbUpdateError);
+        throw new Error('Database update failed');
+      }
 
+      // Clear any cached Shoonya sessions
+      try {
+        shoonyaService.clearCachedInstance(connectionId);
+        logger.info('♻️ Cleared Shoonya cached instance');
+      } catch (cacheError) {
+        logger.warn('⚠️ Failed to clear Shoonya cache', cacheError);
+      }
+
+      // Respond to client
       res.json({
         success: true,
         message: 'Shoonya authentication successful',
@@ -1083,7 +1139,11 @@ router.post('/auth/shoonya/login', async (req, res) => {
       });
 
     } catch (authError) {
-      logger.error('Shoonya authentication error:', authError);
+      logger.error('🔥 Shoonya authentication error (inner block)', {
+        message: authError.message,
+        stack: authError.stack
+      });
+
       res.status(500).json({
         error: 'Authentication failed',
         message: authError.message
@@ -1091,13 +1151,18 @@ router.post('/auth/shoonya/login', async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('Shoonya manual authentication error:', error);
+    logger.error('🔥 Unhandled Shoonya authentication error (outer block)', {
+      message: error.message,
+      stack: error.stack
+    });
+
     res.status(500).json({
       error: 'Authentication failed',
       message: error.message
     });
   }
 });
+
 
 // Disconnect broker
 router.post('/disconnect', authenticateToken, async (req, res) => {
