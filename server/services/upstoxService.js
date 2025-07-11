@@ -14,32 +14,56 @@ class UpstoxService {
   // Generate access token from authorization code
   async generateAccessToken(apiKey, apiSecret, authorizationCode, redirectUri) {
     try {
-      logger.info('Generating Upstox access token');
-      
+      logger.info('🟢 Starting Upstox access token generation');
+
       const tokenUrl = `${this.baseURL}/login/authorization/token`;
-      const data = {
+
+      // Log the actual values being used (except secret)
+      logger.debug('🔍 Token Request Details:', {
+        code: authorizationCode,
+        client_id: apiKey,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code'
+      });
+
+      // Avoid logging secrets in production logs!
+      if (process.env.NODE_ENV !== 'production') {
+        logger.debug('🔐 Secret Key (masked):', apiSecret?.substring(0, 4) + '****');
+      }
+
+      const data = new URLSearchParams({
         code: authorizationCode,
         client_id: apiKey,
         client_secret: apiSecret,
         redirect_uri: redirectUri,
         grant_type: 'authorization_code'
-      };
+      });
 
-      const response = await axios.post(tokenUrl, data, {
+      logger.debug('📦 Encoded Body:', data.toString());
+
+      const response = await axios.post(tokenUrl, data.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json'
         }
       });
 
-      logger.info('Upstox access token generated successfully');
+      logger.info('✅ Upstox access token generated successfully');
       return response.data;
+
     } catch (error) {
-      logger.error('Failed to generate Upstox access token:', error);
-      throw new Error(`Failed to generate access token: ${error.response?.data?.message || error.message}`);
+      const status = error.response?.status;
+      const errData = error.response?.data;
+
+      logger.error('❌ Failed to generate Upstox access token:', {
+        status,
+        message: errData?.message || error.message,
+        response: errData
+      });
+
+      throw new Error(`Failed to generate access token: ${errData?.message || error.message}`);
     }
   }
-
   // Initialize Upstox instance for a connection
   async initializeUpstox(brokerConnection) {
     try {

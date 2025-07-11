@@ -395,13 +395,12 @@ router.post('/connect', authenticateToken, async (req, res) => {
     // For Zerodha, generate login URL with proper redirect URL
     if (brokerName.toLowerCase() === 'zerodha') {
       try {
-        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback`;
-        const state = JSON.stringify({ connection_id: connectionId });
+        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback?connection_id=${connectionId}`;
         
         // Generate Zerodha login URL
-        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
+        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}`;
         
-        logger.info('Generated Zerodha login URL for connection:', connectionId);
+        console.log('🔐 Generated Zerodha login URL for connection:', connectionId);
         
         res.json({ 
           message: 'Broker credentials stored. Please complete authentication.',
@@ -413,7 +412,7 @@ router.post('/connect', authenticateToken, async (req, res) => {
           connectionName: finalConnectionName
         });
       } catch (error) {
-        logger.error('Failed to generate login URL:', error);
+        console.error('❌ Failed to generate login URL:', error);
         res.status(400).json({ error: 'Invalid API key or failed to generate login URL' });
       }
     } else if (brokerName.toLowerCase() === 'upstox') {
@@ -514,19 +513,28 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
         reconnect: true 
       });
 
-      if (connection.broker_name.toLowerCase() === 'zerodha') {
-        const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback`;
-        const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
-
-        logger.info('Generated reconnection login URL for Zerodha connection:', connectionId);
-
-        res.json({
-          message: 'Please complete authentication to reconnect your Zerodha account.',
-          loginUrl,
-          requiresAuth: true,
-          reconnect: true,
-          brokerName: 'Zerodha'
-        });
+      if (brokerName.toLowerCase() === 'zerodha') {
+        try {
+          const redirectUrl = `${baseUrl}/api/broker/auth/zerodha/callback?connection_id=${connectionId}`;
+          
+          // Generate Zerodha login URL
+          const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3&redirect_url=${encodeURIComponent(redirectUrl)}`;
+          
+          console.log('🔐 Generated Zerodha login URL for connection:', connectionId);
+          
+          res.json({ 
+            message: 'Broker credentials stored. Please complete authentication.',
+            connectionId,
+            loginUrl,
+            webhookUrl,
+            requiresAuth: true,
+            redirectUrl,
+            connectionName: finalConnectionName
+          });
+        } catch (error) {
+          console.error('❌ Failed to generate login URL:', error);
+          res.status(400).json({ error: 'Invalid API key or failed to generate login URL' });
+        }
       } else if (connection.broker_name.toLowerCase() === 'upstox') {
         const redirectUrl = `${baseUrl}/api/broker/auth/upstox/callback`;
         const loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${apiKey}&redirect_uri=${encodeURIComponent(redirectUrl)}&state=${encodeURIComponent(state)}`;
@@ -581,12 +589,12 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
   }
 });
 
-// Zerodha OAuth callback handler
+// Zerodha OAuth callback handler - This is the redirect URL endpoint
 router.get('/auth/zerodha/callback', async (req, res) => {
   try {
-    const { request_token, action, status, state } = req.query;
+    const { request_token, action, status, connection_id, reconnect } = req.query;
 
-    logger.info('Zerodha callback received:', { request_token, action, status, state });
+    console.log('📡 Zerodha callback received:', { request_token, action, status, connection_id, reconnect });
 
     // Check if authentication was successful
     if (action !== 'login' || status !== 'success' || !request_token) {
@@ -603,27 +611,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
       `);
     }
 
-    // Parse the state parameter
-    let connectionId, reconnect;
-    try {
-      const stateObj = state ? JSON.parse(decodeURIComponent(state)) : {};
-      connectionId = stateObj.connection_id;
-      reconnect = stateObj.reconnect;
-    } catch (e) {
-      logger.error('Failed to parse state:', e);
-      return res.status(400).send(`
-        <html>
-          <head><title>Invalid State</title></head>
-          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h1 style="color: #dc3545;">❌ Invalid State Parameter</h1>
-            <p>Could not identify the connection. Please try again.</p>
-            <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
-          </body>
-        </html>
-      `);
-    }
-
-    if (!connectionId) {
+    if (!connection_id) {
       return res.status(400).send(`
         <html>
           <head><title>Missing Connection ID</title></head>
@@ -639,7 +627,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
     // Get broker connection
     const connection = await db.getAsync(
       'SELECT * FROM broker_connections WHERE id = ?',
-      [connectionId]
+      [connection_id]
     );
 
     if (!connection) {
@@ -660,7 +648,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
       const apiKey = decryptData(connection.api_key);
       const apiSecret = decryptData(connection.api_secret);
       
-      logger.info('Generating access token for connection:', connectionId);
+      console.log('🔐 Generating access token for connection:', connection_id);
       
       // Generate access token using KiteConnect
       const accessTokenResponse = await kiteService.generateAccessToken(apiKey, apiSecret, request_token);
@@ -684,14 +672,14 @@ router.get('/auth/zerodha/callback', async (req, res) => {
         UPDATE broker_connections 
         SET access_token = ?, public_token = ?, access_token_expires_at = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP 
         WHERE id = ?
-      `, [encryptData(accessToken), encryptData(publicToken), expiresAt, connectionId]);
+      `, [encryptData(accessToken), encryptData(publicToken), expiresAt, connection_id]);
 
       // Clear any cached KiteConnect instances to force refresh
-      kiteService.clearCachedInstance(connectionId);
+      kiteService.clearCachedInstance(connection_id);
 
-      logger.info('Zerodha authentication completed for connection:', connectionId);
+      console.log('✅ Zerodha authentication completed for connection:', connection_id);
 
-      const actionText = reconnect ? 'Reconnection Successful' : 'Authentication Successful';
+      const actionText = reconnect === 'true' ? 'Reconnection Successful' : 'Authentication Successful';
 
       // Return success page
       res.send(`
@@ -713,7 +701,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
               <div class="success-icon">✅</div>
               <h1 class="success-title">${actionText}!</h1>
               <p class="success-message">
-                Your Zerodha account has been successfully ${reconnect ? 'reconnected' : 'connected'} to AutoTraderHub.<br>
+                Your Zerodha account has been successfully ${reconnect === 'true' ? 'reconnected' : 'connected'} to AutoTraderHub.<br>
                 New access token expires: ${new Date(expiresAt * 1000).toLocaleString()}<br>
                 You can now close this window and return to the dashboard.
               </p>
@@ -730,7 +718,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
       `);
 
     } catch (authError) {
-      logger.error('Authentication error:', authError);
+      console.error('❌ Authentication error:', authError);
       res.status(500).send(`
         <html>
           <head><title>Authentication Error</title></head>
@@ -744,7 +732,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('Callback handler error:', error);
+    console.error('❌ Callback handler error:', error);
     res.status(500).send(`
       <html>
         <head><title>Server Error</title></head>
@@ -753,7 +741,7 @@ router.get('/auth/zerodha/callback', async (req, res) => {
           <p>An unexpected error occurred: ${error.message}</p>
           <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Close Window</button>
         </body>
-      </html>
+        </html>
     `);
   }
 });
