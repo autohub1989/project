@@ -16,6 +16,7 @@ interface BrokerConnectionForm {
   apiSecret: string;
   userId: string;
   connectionName: string;
+  redirectUri?: string;
 }
 
 interface BrokerConnection {
@@ -205,6 +206,8 @@ const BrokerConnection: React.FC = () => {
     setValue('apiSecret', '');
     setValue('userId', '');
     setValue('connectionName', '');
+    // Set default redirect URI for Upstox - using HTTP for local development
+    setValue('redirectUri', brokerId === 'upstox' ? 'http://localhost:3001/api/broker/auth/upstox/callback' : '');
     setShowConnectionForm(true);
   };
 
@@ -219,6 +222,7 @@ const BrokerConnection: React.FC = () => {
       setValue('apiSecret', '');
       setValue('userId', connectionDetails.user_id_broker || '');
       setValue('connectionName', connection.connection_name || '');
+      setValue('redirectUri', connection.broker_name === 'upstox' ? 'http://localhost:3001/api/broker/auth/upstox/callback' : '');
       setShowEditForm(true);
     } catch (error: any) {
       console.error('Failed to fetch connection details:', error);
@@ -263,9 +267,15 @@ const BrokerConnection: React.FC = () => {
   const handleReconnectNow = async (connectionId: number) => {
     try {
       setReconnectingConnection(connectionId);
+      console.log('Attempting to reconnect broker connection:', connectionId);
+      
       const response = await brokerAPI.reconnect(connectionId);
+      console.log('Reconnect response:', response.data);
       
       if (response.data.loginUrl) {
+        console.log('Opening authentication window with URL:', response.data.loginUrl);
+        
+        // Open authentication window
         const authWindow = window.open(
           response.data.loginUrl,
           'reconnect-auth',
@@ -273,26 +283,39 @@ const BrokerConnection: React.FC = () => {
         );
 
         if (authWindow) {
+          // Monitor for window close
           const checkClosed = setInterval(() => {
             if (authWindow.closed) {
+              console.log('Auth window closed, refreshing connections');
               clearInterval(checkClosed);
+              
+              // Refresh connections after window is closed
               setTimeout(() => {
                 fetchConnections();
+                setReconnectingConnection(null);
+                toast.success('Authentication completed. Refreshing connection status...');
               }, 2000);
             }
           }, 1000);
 
+          // Set a timeout to close the window after 5 minutes
           setTimeout(() => {
             if (!authWindow.closed) {
+              console.log('Auth window timeout reached, closing window');
               authWindow.close();
               clearInterval(checkClosed);
+              setReconnectingConnection(null);
+              toast.warn('Authentication window timed out. Please try again if needed.');
             }
           }, 300000);
         } else {
+          setReconnectingConnection(null);
           toast.error('Failed to open authentication window. Please check your popup blocker.');
         }
       } else if (response.data.authType === 'credentials') {
         // Handle manual authentication for Angel/Shoonya
+        console.log('Manual authentication required for broker:', response.data.brokerName);
+        
         if (response.data.brokerName?.toLowerCase().includes('angel')) {
           setAngelAuthData({ connectionId });
           setShowAngelAuth(true);
@@ -300,7 +323,10 @@ const BrokerConnection: React.FC = () => {
           setShoonyaAuthData({ connectionId });
           setShowShoonyaAuth(true);
         }
+        setReconnectingConnection(null);
       } else {
+        // Direct reconnection successful
+        console.log('Reconnected successfully using stored credentials');
         toast.success('Reconnected successfully using stored credentials!');
         fetchConnections();
         setReconnectingConnection(null);
@@ -379,13 +405,21 @@ const BrokerConnection: React.FC = () => {
     if (!confirm('Are you sure you want to disconnect this broker?')) return;
 
     try {
+      console.log('Disconnecting broker connection:', connectionId);
       await brokerAPI.disconnect(connectionId);
       toast.success('Broker disconnected successfully!');
+      
+      // Update the local state immediately
       setConnections(prev => prev.map(conn => 
         conn.id === connectionId ? { ...conn, is_active: false } : conn
       ));
-      fetchConnections();
+      
+      // Then refresh from server
+      setTimeout(() => {
+        fetchConnections();
+      }, 1000);
     } catch (error: any) {
+      console.error('Failed to disconnect broker:', error);
       toast.error(error.response?.data?.error || 'Failed to disconnect broker');
     }
   };
@@ -1006,6 +1040,29 @@ const BrokerConnection: React.FC = () => {
                       )}
                     </div>
 
+                    {/* Redirect URI field - only for Upstox */}
+                    {selectedBroker === 'upstox' && (
+                      <div>
+                        <label className="block text-sm font-medium text-bronze-700 mb-2">
+                          Redirect URI
+                        </label>
+                        <input
+                          {...register('redirectUri', { 
+                            required: selectedBroker === 'upstox' ? 'Redirect URI is required for Upstox' : false 
+                          })}
+                          type="url"
+                          className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                          placeholder="http://localhost:3001/api/broker/auth/upstox/callback"
+                        />
+                        {errors.redirectUri && (
+                          <p className="mt-1 text-sm text-red-600">{errors.redirectUri.message}</p>
+                        )}
+                        <p className="mt-1 text-xs text-bronze-500">
+                          This should match the redirect URI registered in your Upstox App settings
+                        </p>
+                      </div>
+                    )}
+
                     <div>
                       <label className="block text-sm font-medium text-bronze-700 mb-2">
                         User ID
@@ -1144,6 +1201,29 @@ const BrokerConnection: React.FC = () => {
                     </button>
                   </div>
                 </div>
+
+                {/* Redirect URI field - only for Upstox */}
+                {editingConnection?.broker_name === 'upstox' && (
+                  <div>
+                    <label className="block text-sm font-medium text-bronze-700 mb-2">
+                      Redirect URI
+                    </label>
+                    <input
+                      {...register('redirectUri', { 
+                        required: editingConnection?.broker_name === 'upstox' ? 'Redirect URI is required for Upstox' : false 
+                      })}
+                      type="url"
+                      className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                      placeholder="http://localhost:3001/api/broker/auth/upstox/callback"
+                    />
+                    {errors.redirectUri && (
+                      <p className="mt-1 text-sm text-red-600">{errors.redirectUri.message}</p>
+                    )}
+                    <p className="mt-1 text-xs text-bronze-500">
+                      This should match the redirect URI registered in your Upstox App settings
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-bronze-700 mb-2">

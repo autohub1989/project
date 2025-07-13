@@ -15,6 +15,7 @@ import VerifyOtpResetPassword from './components/auth/VerifyOtpResetPassword';
 import ResetPassword from './components/auth/ResetPassword';
 import PnL from './components/dashboard/PnL';
 import BrokerConnection from './components/dashboard/BrokerConnection';
+import WebhookSyntaxGenerator from './components/dashboard/WebhookSyntaxGenerator';
 import SubscriptionPlans from './components/subscription/SubscriptionPlans';
 import SubscriptionGuard from './components/subscription/SubscriptionGuard';
 import { isAuthenticated } from './utils/auth';
@@ -81,6 +82,11 @@ function App() {
               <Route path="brokers" element={
                 <SubscriptionGuard feature="broker connections">
                   <BrokerConnection />
+                </SubscriptionGuard>
+              } />
+              <Route path="webhook-syntax" element={
+                <SubscriptionGuard feature="webhook syntax generator">
+                  <WebhookSyntaxGenerator />
                 </SubscriptionGuard>
               } />
             </Route>

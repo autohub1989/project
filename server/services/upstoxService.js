@@ -14,24 +14,29 @@ class UpstoxService {
   // Generate access token from authorization code
   async generateAccessToken(apiKey, apiSecret, authorizationCode, redirectUri) {
     try {
-      logger.info('🟢 Starting Upstox access token generation');
-
-      const tokenUrl = `${this.baseURL}/login/authorization/token`;
-
-      // Log the actual values being used (except secret)
-      logger.debug('🔍 Token Request Details:', {
-        code: authorizationCode,
-        client_id: apiKey,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code'
+      logger.info('Generating Upstox access token', {
+        apiKeyLength: apiKey ? apiKey.length : 0,
+        apiSecretProvided: !!apiSecret,
+        authCodeProvided: !!authorizationCode,
+        redirectUri: redirectUri
       });
-
-      // Avoid logging secrets in production logs!
-      if (process.env.NODE_ENV !== 'production') {
-        logger.debug('🔐 Secret Key (masked):', apiSecret?.substring(0, 4) + '****');
-      }
-
-      const data = new URLSearchParams({
+      
+      const tokenUrl = `${this.baseURL}/login/authorization/token`;
+      
+      // Log the exact values being sent (masked for security)
+      const maskedApiKey = apiKey ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}` : 'undefined';
+      const maskedApiSecret = apiSecret ? '********' : 'undefined';
+      const maskedAuthCode = authorizationCode ? `${authorizationCode.substring(0, 4)}...` : 'undefined';
+      
+      logger.info('Upstox authentication parameters', {
+        maskedApiKey,
+        maskedAuthCode,
+        redirectUri,
+        tokenUrl
+      });
+      
+      // Prepare form data for token request
+      const formData = new URLSearchParams({
         code: authorizationCode,
         client_id: apiKey,
         client_secret: apiSecret,
@@ -39,31 +44,138 @@ class UpstoxService {
         grant_type: 'authorization_code'
       });
 
-      logger.debug('📦 Encoded Body:', data.toString());
+      // Log the exact request being sent
+      logger.info('Upstox token request details', {
+        url: tokenUrl,
+        client_id: maskedApiKey,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+        hasCode: !!authorizationCode,
+        hasSecret: !!apiSecret,
+        formDataString: formData.toString().replace(/(client_secret|code)=[^&]+/g, '$1=REDACTED')
+      });
 
-      const response = await axios.post(tokenUrl, data.toString(), {
+      // Also log to console for immediate visibility
+      console.log('🔐 Token request data:', {
+        url: tokenUrl,
+        client_id: maskedApiKey,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+        hasCode: !!authorizationCode,
+        hasSecret: !!apiSecret
+      });
+
+      const response = await axios.post(tokenUrl, formData.toString(), {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'User-Agent': 'AutoTraderHub/1.0'
+        },
+        timeout: 30000 // 30 second timeout
+      });
+
+      logger.info('Upstox token response received', {
+        status: response.status,
+        statusText: response.statusText,
+        hasAccessToken: !!response.data?.access_token,
+        hasRefreshToken: !!response.data?.refresh_token,
+        expiresIn: response.data?.expires_in
+      });
+
+      console.log('✅ Upstox token response status:', response.status);
+      console.log('✅ Upstox token response data:', response.data);
+
+      logger.info('Upstox access token generated successfully');
+      return response.data;
+    } catch (error) {
+      // Enhanced error logging
+      const errorDetails = {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message,
+        stack: error.stack
+      };
+      
+      logger.error('Failed to generate Upstox access token', errorDetails);
+      
+      // Log the full error response for debugging
+      if (error.response?.data) {
+        logger.error('Upstox error response data', { 
+          responseData: JSON.stringify(error.response.data),
+          headers: error.response.headers
+        });
+      }
+      
+      console.error('❌ Upstox token generation failed:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
+      
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          error.response?.data?.error_description ||
+                          error.message;
+      
+      throw new Error(`Failed to generate access token: ${errorMessage}`);
+    }
+  }
+
+  // Refresh access token using refresh token
+  async refreshAccessToken(brokerConnectionId) {
+    try {
+      logger.info(`Refreshing Upstox access token for connection ${brokerConnectionId}`);
+      
+      const connection = await db.getAsync(
+        'SELECT * FROM broker_connections WHERE id = ? AND is_active = 1',
+        [brokerConnectionId]
+      );
+
+      if (!connection || !connection.refresh_token) {
+        throw new Error('Connection not found or refresh token not available');
+      }
+
+      const apiKey = decryptData(connection.api_key);
+      const apiSecret = decryptData(connection.encrypted_api_secret);
+      const refreshToken = decryptData(connection.refresh_token);
+
+      const tokenUrl = `${this.baseURL}/login/authorization/token`;
+      
+      const formData = new URLSearchParams({
+        refresh_token: refreshToken,
+        client_id: apiKey,
+        client_secret: apiSecret,
+        grant_type: 'refresh_token'
+      });
+
+      const response = await axios.post(tokenUrl, formData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json'
-        }
+        },
+        timeout: 30000
       });
 
-      logger.info('✅ Upstox access token generated successfully');
-      return response.data;
+      if (response.data && response.data.access_token) {
+        logger.info('Upstox access token refreshed successfully');
+        return response.data;
+      } else {
+        throw new Error('Invalid refresh response');
+      }
 
     } catch (error) {
-      const status = error.response?.status;
-      const errData = error.response?.data;
-
-      logger.error('❌ Failed to generate Upstox access token:', {
-        status,
-        message: errData?.message || error.message,
-        response: errData
-      });
-
-      throw new Error(`Failed to generate access token: ${errData?.message || error.message}`);
+      logger.error('Failed to refresh Upstox access token:', error);
+      
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          error.message;
+      
+      throw new Error(`Token refresh failed: ${errorMessage}`);
     }
   }
+
   // Initialize Upstox instance for a connection
   async initializeUpstox(brokerConnection) {
     try {
@@ -315,11 +427,53 @@ class UpstoxService {
 
   // Clear cached instance
   clearCachedInstance(brokerConnectionId) {
-    if (this.upstoxInstances.has(brokerConnectionId)) {
-      this.upstoxInstances.delete(brokerConnectionId);
-      logger.info(`Cleared cached Upstox instance for connection ${brokerConnectionId}`);
+    try {
+      if (this.upstoxInstances.has(brokerConnectionId)) {
+        this.upstoxInstances.delete(brokerConnectionId);
+        logger.info(`Cleared cached Upstox instance for connection ${brokerConnectionId}`);
+        console.log(`🗑️ Cleared cached Upstox instance for connection ${brokerConnectionId}`);
+        return true;
+      } else {
+        logger.info(`No cached Upstox instance found for connection ${brokerConnectionId}`);
+        console.log(`ℹ️ No cached Upstox instance found for connection ${brokerConnectionId}`);
+        return false;
+      }
+    } catch (error) {
+      logger.error(`Error clearing cached Upstox instance: ${error.message}`);
+      console.error(`❌ Error clearing cached Upstox instance: ${error.message}`);
+      return false;
     }
   }
 }
 
-export default new UpstoxService();
+// Utility function to check Upstox API status
+async function checkUpstoxApiStatus() {
+  const upstoxService = new UpstoxService();
+  try {
+    const response = await axios.get(`${upstoxService.baseURL}/status`, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'AutoTraderHub/1.0'
+      },
+      timeout: 10000
+    });
+    
+    return {
+      status: 'success',
+      apiStatus: response.data,
+      statusCode: response.status,
+      message: 'Upstox API is available'
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      statusCode: error.response?.status,
+      message: error.message,
+      error: error.response?.data || error.message
+    };
+  }
+}
+
+const upstoxServiceInstance = new UpstoxService();
+export { checkUpstoxApiStatus };
+export default upstoxServiceInstance;

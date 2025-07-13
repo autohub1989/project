@@ -104,4 +104,4 @@ class SubscriptionService {
   }
 }
 
-export const subscriptionAPI = new SubscriptionService();
+export default new SubscriptionService();

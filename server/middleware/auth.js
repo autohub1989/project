@@ -15,9 +15,13 @@ export const authenticateToken = async (req, res, next) => {
       ip: req.ip,
       userAgent: req.get('User-Agent'),
       path: req.path,
-      method: req.method
+      method: req.method,
+      authHeader: authHeader ? 'present but invalid format' : 'missing'
     });
-    return res.status(401).json({ error: 'Access token required' });
+    return res.status(401).json({ 
+      error: 'Access token required',
+      details: 'Authorization header must be in format: Bearer <token>'
+    });
   }
 
   try {

@@ -13,15 +13,15 @@ class ShoonyaService {
   }
 
   // Generate session token using login credentials
-  async generateSessionToken(apiKey, userId, password, twoFA, vendor_code, api_secret, imei) {
+  async generateSessionToken(apiKey, userId, password, twoFA, vendorCode, imei) {
     try {
       logger.info('Generating Shoonya session token');
       
       // Create password hash as per Shoonya documentation
       const pwd = crypto.createHash('sha256').update(password).digest('hex');
       
-      // Create app key hash
-      const app_key = `${userId}|${api_secret}`;
+      // Create app key hash - Shoonya doesn't use API secret, only API key
+      const app_key = `${userId}|${apiKey}`;
       const appkey_hash = crypto.createHash('sha256').update(app_key).digest('hex');
       
       const loginUrl = `${this.baseURL}/NorenWClientTP/QuickAuth`;
@@ -29,7 +29,7 @@ class ShoonyaService {
         uid: userId,
         pwd: pwd,
         factor2: twoFA,
-        vc: vendor_code,
+        vc: vendorCode,
         appkey: appkey_hash,
         imei: imei || 'abc1234',
         source: 'API'

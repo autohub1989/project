@@ -9,7 +9,8 @@ import {
   Settings,
   Menu,
   X,
-  Activity
+  Activity,
+  Code
 } from 'lucide-react';
 
 const DashboardLayout: React.FC = () => {

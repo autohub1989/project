@@ -1,6 +1,6 @@
 import express from 'express';
 import { db } from '../database/init.js';
-import { subscriptionAPI } from '../services/subscriptionService.js';
+import subscriptionService from '../services/subscriptionService.js';
 import kiteService from '../services/kiteService.js';
 import upstoxService from '../services/upstoxService.js';
 import angelService from '../services/angelService.js';
@@ -53,10 +53,10 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
       tag: 'AutoTraderHub'
     };
   } else if (brokerName.toLowerCase() === 'upstox') {
-    // For Upstox, we need instrument_token instead of tradingsymbol
-    // In a real implementation, you'd look up the instrument_token from symbol
+    // For Upstox, convert symbol to instrument format
+    const instrumentToken = payload.instrument_token || `${symbolStr}`;
     formatted = {
-      instrument_token: symbolStr, // This should be looked up from symbol
+      instrument_token: instrumentToken,
       quantity: parseInt(payload.quantity),
       product: payload.product === 'MIS' ? 'I' : (payload.product === 'CNC' ? 'D' : 'I'), // I=Intraday, D=Delivery
       validity: payload.validity || 'DAY',
@@ -69,11 +69,12 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
       tag: 'AutoTraderHub'
     };
   } else if (brokerName.toLowerCase() === 'angel') {
-    // For Angel Broking, we need symboltoken and specific format
+    // For Angel Broking, use symboltoken from payload or default
+    const symbolToken = payload.symboltoken || '2885'; // Default for RELIANCE
     formatted = {
       variety: 'NORMAL',
       tradingsymbol: symbolStr,
-      symboltoken: payload.symboltoken || symbolStr, // This should be looked up from symbol
+      symboltoken: symbolToken,
       transactiontype: payload.action.toUpperCase(),
       exchange: payload.exchange || 'NSE',
       ordertype: payload.order_type || 'MARKET',
@@ -85,7 +86,7 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
       quantity: parseInt(payload.quantity)
     };
   } else if (brokerName.toLowerCase() === 'shoonya') {
-    // For Shoonya, we need tsym and specific format
+    // For Shoonya, format according to their API requirements
     formatted = {
       exch: payload.exchange || 'NSE',
       tsym: symbolStr,
@@ -103,6 +104,23 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
       formatted.prctyp = payload.order_type === 'SL' ? 'SL-LMT' : 'SL-MKT';
       formatted.trgprc = parseFloat(payload.trigger_price).toString();
     }
+  } else if (brokerName.toLowerCase() === '5paisa') {
+    // For 5Paisa, format according to their API requirements
+    formatted = {
+      Exchange: payload.exchange === 'NSE' ? 'N' : 'B',
+      ExchangeType: 'C', // C=Cash, D=Derivative
+      Symbol: symbolStr,
+      Qty: parseInt(payload.quantity),
+      Price: payload.order_type === 'LIMIT' ? parseFloat(payload.price || 0) : 0,
+      OrderType: payload.order_type === 'LIMIT' ? 'L' : 'M', // M=Market, L=Limit
+      BuySell: payload.action.toUpperCase() === 'BUY' ? 'B' : 'S',
+      DisQty: payload.disclosed_quantity || 0,
+      IsStopLossOrder: ['SL', 'SL-M'].includes(payload.order_type),
+      StopLossPrice: ['SL', 'SL-M'].includes(payload.order_type) ? parseFloat(payload.trigger_price || 0) : 0,
+      IsVTD: false,
+      IOCOrder: false,
+      IsIntraday: payload.product === 'MIS'
+    };
   } else {
     // Default format for other brokers
     formatted = {
