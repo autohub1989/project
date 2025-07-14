@@ -48,20 +48,26 @@ class ShoonyaService {
       // Create password hash as per Shoonya documentation
       const pwd = crypto.createHash('sha256').update(password).digest('hex');
       
-      // Create app key hash using userId and apiSecret
-      const u_app_key = `${userId}|${apiSecret}`;
-      const appkey_hash = crypto.createHash('sha256').update(u_app_key).digest('hex');
-      
       // Validate parameters
       if (!userId) throw new Error('User ID is required for Shoonya login');
       if (!password) throw new Error('Password is required for Shoonya login');
       if (!vendorCode) throw new Error('Vendor code is required for Shoonya login');
       
-      // API secret is optional for Shoonya
+      // API secret is required for Shoonya app key generation
       if (!apiSecret) {
-        logger.warn('No API secret provided for Shoonya login, using empty string');
-        apiSecret = '';
+        throw new Error('API secret is required for Shoonya login to generate app key hash');
       }
+      
+      // Create app key hash using userId and apiSecret
+      const u_app_key = `${userId}|${apiSecret}`;
+      const appkey_hash = crypto.createHash('sha256').update(u_app_key).digest('hex');
+      
+      logger.info('App key hash generation:', {
+        userId,
+        apiSecretLength: apiSecret ? apiSecret.length : 0,
+        u_app_key_length: u_app_key.length,
+        appkey_hash_length: appkey_hash.length
+      });
       
       // Log parameters for debugging
       logger.debug('Shoonya login parameters:', {
