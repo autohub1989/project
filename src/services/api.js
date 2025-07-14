@@ -140,7 +140,7 @@ export const brokerAPI = {
   shoonyaAuth: async (data) => {
     try {
       console.log('🚀 Shoonya manual authentication for connection:', data.connectionId);
-      const response = await api.post('/broker/auth/shoonya/login', data);
+      const response = await api.post('/auth/shoonya/login', data);
       console.log('✅ Shoonya authentication successful:', response.data);
       return response;
     } catch (error) {
