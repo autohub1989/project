@@ -47,8 +47,8 @@ class BrokerConfigService {
       shoonya: {
         name: 'Shoonya',
         authMethod: 'manual',
-        requiredFields: ['user_id_broker', 'password', 'vendor_code'],
-        optionalFields: ['two_fa', 'api_key', 'api_secret', 'imei'],
+        requiredFields: ['api_key', 'user_id_broker', 'password', 'vendor_code', 'two_fa'],
+        optionalFields: ['api_secret', 'imei'],
         authUrl: null,
         baseUrl: 'https://api.shoonya.com',
         webhookFormat: 'shoonya',
@@ -108,12 +108,22 @@ class BrokerConfigService {
     return config.webhookFormat;
   }
 
-  validateBrokerData(brokerName, data) {
+  validateBrokerData(brokerName, data, isInitialConnection = false) {
     const config = this.getBrokerConfig(brokerName);
     const errors = [];
 
+    // For manual auth brokers (Angel, Shoonya), password and two_fa are collected in the second step
+    let fieldsToValidate = config.requiredFields;
+    
+    if (isInitialConnection && config.authMethod === 'manual') {
+      // For initial connection, don't validate password and two_fa for manual auth brokers
+      fieldsToValidate = config.requiredFields.filter(field => 
+        !['password', 'two_fa', 'pin'].includes(field)
+      );
+    }
+
     // Check required fields
-    for (const field of config.requiredFields) {
+    for (const field of fieldsToValidate) {
       if (!data[field] || data[field].trim() === '') {
         errors.push(`${field} is required for ${config.name}`);
       }
