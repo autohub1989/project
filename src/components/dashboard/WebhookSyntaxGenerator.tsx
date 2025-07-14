@@ -37,78 +37,88 @@ const WebhookSyntaxGenerator: React.FC = () => {
     product: 'MIS',
     exchange: 'NSE',
     price: 0,
-    trigger_price: 0
+    trigger_price: 0,
+    validity: 'DAY',
+    disclosed_quantity: 0,
+    symboltoken: '2885',
+    squareoff: 0,
+    stoploss: 0,
+    is_amo: false,
+    tag: 'TradingView'
   });
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [brokerConnections, setBrokerConnections] = useState<any[]>([]);
 
   useEffect(() => {
-    fetchBrokerConfigs();
+    initializeBrokerConfigs();
+    fetchBrokerConnections();
   }, []);
 
   useEffect(() => {
-    if (selectedBroker) {
+    if (selectedBroker && brokerConfigs.length > 0) {
       generateSyntax();
     }
-  }, [selectedBroker, customFields]);
+  }, [selectedBroker, customFields, brokerConfigs]);
 
-  const fetchBrokerConfigs = async () => {
-    try {
-      // This would be an API call to get broker configurations
-      const mockConfigs: BrokerConfig[] = [
-        {
-          id: 'zerodha',
-          name: 'Zerodha',
-          webhookFormat: 'zerodha',
-          orderFields: {
-            required: ['symbol', 'action', 'quantity', 'order_type', 'product'],
-            optional: ['exchange', 'validity', 'price', 'trigger_price', 'tag']
-          }
-        },
-        {
-          id: 'upstox',
-          name: 'Upstox',
-          webhookFormat: 'upstox',
-          orderFields: {
-            required: ['symbol', 'action', 'quantity', 'order_type', 'product'],
-            optional: ['exchange', 'validity', 'price', 'trigger_price', 'disclosed_quantity', 'is_amo', 'tag']
-          }
-        },
-        {
-          id: 'angel',
-          name: 'Angel Broking',
-          webhookFormat: 'angel',
-          orderFields: {
-            required: ['symbol', 'symboltoken', 'action', 'quantity', 'order_type', 'product'],
-            optional: ['exchange', 'validity', 'price', 'squareoff', 'stoploss']
-          }
-        },
-        {
-          id: 'shoonya',
-          name: 'Shoonya',
-          webhookFormat: 'shoonya',
-          orderFields: {
-            required: ['symbol', 'action', 'quantity', 'order_type', 'product'],
-            optional: ['exchange', 'validity', 'price', 'trigger_price']
-          }
-        },
-        {
-          id: '5paisa',
-          name: '5Paisa',
-          webhookFormat: '5paisa',
-          orderFields: {
-            required: ['symbol', 'action', 'quantity', 'order_type'],
-            optional: ['exchange', 'price', 'disclosed_quantity', 'is_intraday']
-          }
+  const initializeBrokerConfigs = () => {
+    const configs: BrokerConfig[] = [
+      {
+        id: 'zerodha',
+        name: 'Zerodha',
+        webhookFormat: 'zerodha',
+        orderFields: {
+          required: ['symbol', 'action', 'quantity', 'order_type', 'product'],
+          optional: ['exchange', 'validity', 'price', 'trigger_price', 'disclosed_quantity', 'tag']
         }
-      ];
-      
-      setBrokerConfigs(mockConfigs);
+      },
+      {
+        id: 'upstox',
+        name: 'Upstox',
+        webhookFormat: 'upstox',
+        orderFields: {
+          required: ['symbol', 'action', 'quantity', 'order_type', 'product'],
+          optional: ['exchange', 'validity', 'price', 'trigger_price', 'disclosed_quantity', 'is_amo', 'tag']
+        }
+      },
+      {
+        id: 'angel',
+        name: 'Angel Broking',
+        webhookFormat: 'angel',
+        orderFields: {
+          required: ['symbol', 'symboltoken', 'action', 'quantity', 'order_type', 'product'],
+          optional: ['exchange', 'validity', 'price', 'squareoff', 'stoploss']
+        }
+      },
+      {
+        id: 'shoonya',
+        name: 'Shoonya',
+        webhookFormat: 'shoonya',
+        orderFields: {
+          required: ['symbol', 'action', 'quantity', 'order_type', 'product'],
+          optional: ['exchange', 'validity', 'price', 'trigger_price']
+        }
+      },
+      {
+        id: '5paisa',
+        name: '5Paisa',
+        webhookFormat: '5paisa',
+        orderFields: {
+          required: ['symbol', 'action', 'quantity', 'order_type'],
+          optional: ['exchange', 'price', 'disclosed_quantity', 'is_intraday']
+        }
+      }
+    ];
+    
+    setBrokerConfigs(configs);
+  };
+
+  const fetchBrokerConnections = async () => {
+    try {
+      const response = await brokerAPI.getConnections();
+      setBrokerConnections(response.data.connections || []);
     } catch (error) {
-      console.error('Failed to fetch broker configs:', error);
-      toast.error('Failed to load broker configurations');
-    } finally {
-      setLoading(false);
+      console.error('Failed to fetch broker connections:', error);
     }
   };
 
@@ -122,57 +132,58 @@ const WebhookSyntaxGenerator: React.FC = () => {
         product: customFields.product || "MIS",
         exchange: customFields.exchange || "NSE",
         validity: customFields.validity || "DAY",
-        price: parseFloat(customFields.price) || 0,
-        trigger_price: parseFloat(customFields.trigger_price) || 0,
-        tag: "TradingView"
+        price: customFields.order_type === "LIMIT" ? (parseFloat(customFields.price) || 2500) : 0,
+        trigger_price: ["SL", "SL-M"].includes(customFields.order_type) ? (parseFloat(customFields.trigger_price) || 2450) : 0,
+        disclosed_quantity: parseInt(customFields.disclosed_quantity) || 0,
+        tag: customFields.tag || "TradingView"
       },
       upstox: {
         symbol: customFields.symbol || "RELIANCE",
         action: customFields.action || "BUY",
         quantity: parseInt(customFields.quantity) || 1,
         order_type: customFields.order_type || "MARKET",
-        product: customFields.product === "MIS" ? "I" : "D",
-        exchange: customFields.exchange === "NSE" ? "NSE_EQ" : customFields.exchange || "NSE_EQ",
+        product: customFields.product === "MIS" ? "I" : (customFields.product === "CNC" ? "D" : "I"),
+        exchange: customFields.exchange === "NSE" ? "NSE_EQ" : (customFields.exchange || "NSE_EQ"),
         validity: customFields.validity || "DAY",
-        price: parseFloat(customFields.price) || 0,
-        trigger_price: parseFloat(customFields.trigger_price) || 0,
+        price: customFields.order_type === "LIMIT" ? (parseFloat(customFields.price) || 2500) : 0,
+        trigger_price: ["SL", "SL-M"].includes(customFields.order_type) ? (parseFloat(customFields.trigger_price) || 2450) : 0,
         disclosed_quantity: parseInt(customFields.disclosed_quantity) || 0,
         is_amo: customFields.is_amo || false,
-        tag: "TradingView"
+        tag: customFields.tag || "TradingView"
       },
       angel: {
-        symbol: customFields.symbol || "RELIANCE-EQ",
+        symbol: (customFields.symbol || "RELIANCE") + "-EQ",
         symboltoken: customFields.symboltoken || "2885",
         action: customFields.action || "BUY",
         quantity: parseInt(customFields.quantity) || 1,
         order_type: customFields.order_type || "MARKET",
-        product: customFields.product === "MIS" ? "INTRADAY" : "DELIVERY",
+        product: customFields.product === "MIS" ? "INTRADAY" : (customFields.product === "CNC" ? "DELIVERY" : "INTRADAY"),
         exchange: customFields.exchange || "NSE",
         validity: customFields.validity || "DAY",
-        price: customFields.price?.toString() || "0",
-        squareoff: customFields.squareoff?.toString() || "0",
-        stoploss: customFields.stoploss?.toString() || "0"
+        price: customFields.order_type === "LIMIT" ? (parseFloat(customFields.price) || 2500).toString() : "0",
+        squareoff: (parseFloat(customFields.squareoff) || 0).toString(),
+        stoploss: ["SL", "SL-M"].includes(customFields.order_type) ? (parseFloat(customFields.stoploss) || 2450).toString() : "0"
       },
       shoonya: {
         symbol: customFields.symbol || "RELIANCE",
         action: customFields.action || "BUY",
         quantity: parseInt(customFields.quantity) || 1,
-        order_type: customFields.order_type === "MARKET" ? "MKT" : "LMT",
-        product: customFields.product === "MIS" ? "I" : "C",
+        order_type: customFields.order_type === "MARKET" ? "MKT" : (customFields.order_type === "LIMIT" ? "LMT" : "MKT"),
+        product: customFields.product === "MIS" ? "I" : (customFields.product === "CNC" ? "C" : "I"),
         exchange: customFields.exchange || "NSE",
         validity: customFields.validity || "DAY",
-        price: customFields.price?.toString() || "0",
-        trigger_price: customFields.trigger_price?.toString() || "0"
+        price: customFields.order_type === "LIMIT" ? (parseFloat(customFields.price) || 2500).toString() : "0",
+        trigger_price: ["SL", "SL-M"].includes(customFields.order_type) ? (parseFloat(customFields.trigger_price) || 2450).toString() : "0"
       },
       '5paisa': {
         symbol: customFields.symbol || "RELIANCE",
         action: customFields.action || "BUY",
         quantity: parseInt(customFields.quantity) || 1,
         order_type: customFields.order_type || "MARKET",
-        exchange: customFields.exchange === "NSE" ? "N" : "B",
-        price: parseFloat(customFields.price) || 0,
+        exchange: customFields.exchange === "NSE" ? "N" : (customFields.exchange === "BSE" ? "B" : "N"),
+        price: customFields.order_type === "LIMIT" ? (parseFloat(customFields.price) || 2500) : 0,
         disclosed_quantity: parseInt(customFields.disclosed_quantity) || 0,
-        is_intraday: customFields.is_intraday !== false
+        is_intraday: customFields.product === "MIS"
       }
     };
 
@@ -211,10 +222,21 @@ ${webhookSyntax.optional_fields.map(field => `- ${field}`).join('\n')}
 ${JSON.stringify(webhookSyntax.example, null, 2)}
 \`\`\`
 
-## TradingView Alert Syntax
-\`\`\`
+## TradingView Alert Message
+Copy this JSON payload into your TradingView alert message field:
+
+\`\`\`json
 ${JSON.stringify(webhookSyntax.example, null, 2)}
 \`\`\`
+
+## Usage Instructions
+1. Create an alert in TradingView
+2. In the Notifications tab, enable "Webhook URL"
+3. Enter your webhook URL from the broker connection
+4. Paste the above JSON payload in the "Message" field
+5. Save and activate the alert
+
+Generated by AutoTraderHub - ${new Date().toISOString()}
 `;
 
     const blob = new Blob([content], { type: 'text/markdown' });
@@ -238,13 +260,12 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
     '5paisa': 'https://www.5paisa.com/developerapi'
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-500"></div>
-      </div>
+  const getWebhookUrl = () => {
+    const connection = brokerConnections.find(conn => 
+      conn.broker_name.toLowerCase() === selectedBroker && conn.is_active
     );
-  }
+    return connection?.webhook_url || 'Connect your broker to get webhook URL';
+  };
 
   return (
     <div className="space-y-6">
@@ -270,7 +291,7 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
             disabled={!webhookSyntax}
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            className="flex items-center space-x-2 bg-bronze-600 text-white px-4 py-2 rounded-lg hover:bg-bronze-700 transition-colors disabled:opacity-50"
+            className="flex items-center space-x-2 bg-bronze-600 text-white px-4 py-2 rounded-lg hover:bg-bronze-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="w-4 h-4" />
             <span>Download</span>
@@ -319,6 +340,36 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* Webhook URL Display */}
+              <div>
+                <label className="block text-sm font-medium text-bronze-700 mb-2">
+                  Webhook URL
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={getWebhookUrl()}
+                    readOnly
+                    className="flex-1 px-4 py-3 bg-gray-50 border border-beige-200 rounded-lg text-bronze-800 text-sm"
+                  />
+                  <motion.button
+                    onClick={() => copyToClipboard(getWebhookUrl(), 'Webhook URL')}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="px-3 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                  >
+                    {copiedSection === 'Webhook URL' ? (
+                      <CheckCircle className="w-4 h-4" />
+                    ) : (
+                      <Copy className="w-4 h-4" />
+                    )}
+                  </motion.button>
+                </div>
+                <p className="text-xs text-bronze-500 mt-1">
+                  Use this URL in your TradingView alert webhook configuration
+                </p>
               </div>
 
               {selectedBroker && brokerDocs[selectedBroker as keyof typeof brokerDocs] && (
@@ -419,6 +470,49 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
                   <option value="BFO">BFO</option>
                 </select>
               </div>
+
+              {/* Conditional fields based on order type */}
+              {(customFields.order_type === "LIMIT") && (
+                <div>
+                  <label className="block text-sm font-medium text-bronze-700 mb-1">Price</label>
+                  <input
+                    type="number"
+                    value={customFields.price}
+                    onChange={(e) => setCustomFields({...customFields, price: e.target.value})}
+                    className="w-full px-3 py-2 bg-cream-50 border border-beige-200 rounded-lg text-bronze-800 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    placeholder="2500"
+                    step="0.01"
+                  />
+                </div>
+              )}
+
+              {(customFields.order_type === "SL" || customFields.order_type === "SL-M") && (
+                <div>
+                  <label className="block text-sm font-medium text-bronze-700 mb-1">Trigger Price</label>
+                  <input
+                    type="number"
+                    value={customFields.trigger_price}
+                    onChange={(e) => setCustomFields({...customFields, trigger_price: e.target.value})}
+                    className="w-full px-3 py-2 bg-cream-50 border border-beige-200 rounded-lg text-bronze-800 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    placeholder="2450"
+                    step="0.01"
+                  />
+                </div>
+              )}
+
+              {/* Angel Broking specific fields */}
+              {selectedBroker === 'angel' && (
+                <div>
+                  <label className="block text-sm font-medium text-bronze-700 mb-1">Symbol Token</label>
+                  <input
+                    type="text"
+                    value={customFields.symboltoken}
+                    onChange={(e) => setCustomFields({...customFields, symboltoken: e.target.value})}
+                    className="w-full px-3 py-2 bg-cream-50 border border-beige-200 rounded-lg text-bronze-800 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    placeholder="2885"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -549,7 +643,7 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
                   <div className="w-6 h-6 bg-amber-500 text-white rounded-full flex items-center justify-center text-sm font-bold">1</div>
                   <div>
                     <p className="text-bronze-800 font-medium">Create Alert in TradingView</p>
-                    <p className="text-bronze-600 text-sm">Go to your chart and click on the Alert button</p>
+                    <p className="text-bronze-600 text-sm">Go to your chart and click on the Alert button (clock icon)</p>
                   </div>
                 </div>
                 
@@ -557,7 +651,7 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
                   <div className="w-6 h-6 bg-amber-500 text-white rounded-full flex items-center justify-center text-sm font-bold">2</div>
                   <div>
                     <p className="text-bronze-800 font-medium">Configure Webhook</p>
-                    <p className="text-bronze-600 text-sm">In the Notifications tab, check "Webhook URL" and paste your webhook URL</p>
+                    <p className="text-bronze-600 text-sm">In the Notifications tab, check "Webhook URL" and paste your webhook URL above</p>
                   </div>
                 </div>
                 
@@ -576,6 +670,16 @@ ${JSON.stringify(webhookSyntax.example, null, 2)}
                     <p className="text-bronze-600 text-sm">Test your alert and activate it to start automated trading</p>
                   </div>
                 </div>
+              </div>
+
+              <div className="mt-6 p-4 bg-amber-100 rounded-lg">
+                <h4 className="font-bold text-amber-800 mb-2">💡 Pro Tips:</h4>
+                <ul className="text-amber-700 text-sm space-y-1">
+                  <li>• Use dynamic values like {{close}} for current price in LIMIT orders</li>
+                  <li>• Test with small quantities first before going live</li>
+                  <li>• Monitor your trades in the Orders section of the dashboard</li>
+                  <li>• Ensure your broker account has sufficient margin</li>
+                </ul>
               </div>
             </motion.div>
           </motion.div>
