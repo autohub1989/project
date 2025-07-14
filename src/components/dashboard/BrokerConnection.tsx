@@ -17,6 +17,10 @@ interface BrokerConnectionForm {
   userId: string;
   connectionName: string;
   redirectUri?: string;
+  vendorCode?: string;
+  password?: string;
+  imei?: string;
+  twoFA?: string;
 }
 
 interface BrokerConnection {
@@ -52,7 +56,7 @@ const BrokerConnection: React.FC = () => {
   const [showAngelAuth, setShowAngelAuth] = useState(false);
   const [showShoonyaAuth, setShowShoonyaAuth] = useState(false);
   const [angelAuthData, setAngelAuthData] = useState<{connectionId: number} | null>(null);
-  const [shoonyaAuthData, setShoonyaAuthData] = useState<{connectionId: number} | null>(null);
+  const [shoonyaAuthData, setShoonyaAuthData] = useState<{connectionId: number, storedCredentials?: any} | null>(null);
   
   const { register, handleSubmit, watch, reset, setValue, formState: { errors } } = useForm<BrokerConnectionForm>();
   const selectedBroker = watch('brokerName');
@@ -134,7 +138,16 @@ const BrokerConnection: React.FC = () => {
           setAngelAuthData({ connectionId: response.data.connectionId });
           setShowAngelAuth(true);
         } else if (data.brokerName.toLowerCase() === 'shoonya') {
-          setShoonyaAuthData({ connectionId: response.data.connectionId });
+          // For new connections, pass the form data as stored credentials
+          setShoonyaAuthData({ 
+            connectionId: response.data.connectionId,
+            storedCredentials: {
+              user_id_broker: data.userId,
+              vendor_code: data.vendorCode,
+              imei: data.imei,
+              api_key: data.apiKey
+            }
+          });
           setShowShoonyaAuth(true);
         }
         toast.success('Credentials saved! Please complete authentication.');
@@ -150,11 +163,17 @@ const BrokerConnection: React.FC = () => {
       const errorMessage = error.response?.data?.error || 'Failed to connect broker';
       toast.error(errorMessage);
       
-      if (error.response?.data?.errors) {
-        const errors = error.response.data.errors;
-        Object.keys(errors).forEach(key => {
-          toast.error(`${key}: ${errors[key]}`);
-        });
+      if (error.response?.data?.details) {
+        const details = error.response.data.details;
+        if (Array.isArray(details)) {
+          details.forEach(detail => {
+            toast.error(detail);
+          });
+        } else {
+          Object.keys(details).forEach(key => {
+            toast.error(`${key}: ${details[key]}`);
+          });
+        }
       }
     } finally {
       setIsSubmitting(false);
@@ -178,11 +197,24 @@ const BrokerConnection: React.FC = () => {
         });
         toast.success('Credentials updated! Please complete authentication.');
       } else if (response.data.requiresAuth && response.data.authType === 'credentials') {
-        // For Angel Broking, show manual authentication form
-        setShowAngelAuth({
-          connectionId: response.data.connectionId,
-          brokerName: editingConnection.broker_name
-        });
+        // For Angel/Shoonya, show manual authentication form
+        if (editingConnection.broker_name.toLowerCase() === 'angel') {
+          setAngelAuthData({ connectionId: response.data.connectionId });
+          setShowAngelAuth(true);
+        } else if (editingConnection.broker_name.toLowerCase() === 'shoonya') {
+          // Fetch stored credentials for Shoonya
+          try {
+            const credentialsResponse = await brokerAPI.getConnection(editingConnection.id);
+            setShoonyaAuthData({ 
+              connectionId: response.data.connectionId,
+              storedCredentials: credentialsResponse.data.connection 
+            });
+          } catch (error) {
+            console.error('Failed to fetch stored credentials:', error);
+            setShoonyaAuthData({ connectionId: response.data.connectionId });
+          }
+          setShowShoonyaAuth(true);
+        }
         toast.success('Credentials updated! Please complete authentication.');
       } else {
         toast.success('Broker connection updated successfully!');
@@ -320,7 +352,17 @@ const BrokerConnection: React.FC = () => {
           setAngelAuthData({ connectionId });
           setShowAngelAuth(true);
         } else if (response.data.brokerName?.toLowerCase().includes('shoonya')) {
-          setShoonyaAuthData({ connectionId });
+          // Fetch stored credentials for Shoonya
+          try {
+            const credentialsResponse = await brokerAPI.getConnection(connectionId);
+            setShoonyaAuthData({ 
+              connectionId, 
+              storedCredentials: credentialsResponse.data.connection 
+            });
+          } catch (error) {
+            console.error('Failed to fetch stored credentials:', error);
+            setShoonyaAuthData({ connectionId });
+          }
           setShowShoonyaAuth(true);
         }
         setReconnectingConnection(null);
@@ -395,7 +437,18 @@ const BrokerConnection: React.FC = () => {
         fetchConnections();
       }
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Shoonya authentication failed');
+      console.error('Shoonya authentication error:', error);
+      const errorMessage = error.response?.data?.error || 'Shoonya authentication failed';
+      toast.error(errorMessage);
+      
+      if (error.response?.data?.details) {
+        const details = error.response.data.details;
+        if (Array.isArray(details)) {
+          details.forEach(detail => {
+            toast.error(detail);
+          });
+        }
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -919,6 +972,7 @@ const BrokerConnection: React.FC = () => {
               setShoonyaAuthData(null);
             }}
             isLoading={isSubmitting}
+            storedCredentials={shoonyaAuthData.storedCredentials}
           />
         )}
       </AnimatePresence>
@@ -1018,26 +1072,28 @@ const BrokerConnection: React.FC = () => {
 
                     <div>
                       <label className="block text-sm font-medium text-bronze-700 mb-2">
-                        API Secret
+                        API Secret {selectedBroker === 'shoonya' && <span className="text-bronze-500">(Optional)</span>}
                       </label>
                       <div className="relative">
                         <input
-                          {...register('apiSecret', { required: 'API Secret is required' })}
+                          {...register('apiSecret', { 
+                            required: selectedBroker === 'shoonya' ? false : 'API Secret is required' 
+                          })}
                           type={showApiSecret ? 'text' : 'password'}
                           className="w-full px-4 py-3 pr-12 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
-                          placeholder="Enter your API secret"
+                          placeholder={selectedBroker === 'shoonya' ? 'Enter your API secret (optional)' : 'Enter your API secret'}
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowApiSecret(!showApiSecret)}
-                          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-bronze-400 hover:text-bronze-600 transition-colors"
-                        >
-                          {showApiSecret ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                        </button>
-                      </div>
-                      {errors.apiSecret && (
-                        <p className="mt-1 text-sm text-red-600">{errors.apiSecret.message}</p>
-                      )}
+                          <button
+                            type="button"
+                            onClick={() => setShowApiSecret(!showApiSecret)}
+                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-bronze-400 hover:text-bronze-600 transition-colors"
+                          >
+                            {showApiSecret ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                          </button>
+                        </div>
+                        {errors.apiSecret && (
+                          <p className="mt-1 text-sm text-red-600">{errors.apiSecret.message}</p>
+                        )}
                     </div>
 
                     {/* Redirect URI field - only for Upstox */}
@@ -1097,20 +1153,6 @@ const BrokerConnection: React.FC = () => {
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-bronze-700 mb-2">
-                            Password
-                          </label>
-                          <input
-                            {...register('password', { required: 'Password is required for Shoonya' })}
-                            type="password"
-                            className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
-                            placeholder="Enter your Shoonya password"
-                          />
-                          {errors.password && (
-                            <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
-                          )}
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-bronze-700 mb-2">
                             IMEI (Optional)
                           </label>
                           <input
@@ -1120,19 +1162,14 @@ const BrokerConnection: React.FC = () => {
                             placeholder="Enter IMEI (optional)"
                           />
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-bronze-700 mb-2">
-                            2FA/TOTP
-                          </label>
-                          <input
-                            {...register('twoFA', { required: '2FA/TOTP is required for Shoonya' })}
-                            type="text"
-                            className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
-                            placeholder="Enter 2FA/TOTP code"
-                          />
-                          {errors.twoFA && (
-                            <p className="mt-1 text-sm text-red-600">{errors.twoFA.message}</p>
-                          )}
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                          <div className="flex items-center space-x-2 mb-2">
+                            <AlertCircle className="w-4 h-4 text-amber-600" />
+                            <span className="text-amber-700 text-sm font-medium">Authentication Note</span>
+                          </div>
+                          <p className="text-amber-600 text-xs">
+                            Password and 2FA/TOTP will be requested during the authentication process.
+                          </p>
                         </div>
                       </>
                     )}
@@ -1240,26 +1277,28 @@ const BrokerConnection: React.FC = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-bronze-700 mb-2">
-                    API Secret
-                  </label>
-                  <div className="relative">
-                    <input
-                      {...register('apiSecret')}
-                      type={showApiSecret ? 'text' : 'password'}
-                      className="w-full px-4 py-3 pr-12 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
-                      placeholder="Enter new API secret"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiSecret(!showApiSecret)}
-                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-bronze-400 hover:text-bronze-600 transition-colors"
-                    >
-                      {showApiSecret ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                    </button>
+                {editingConnection?.broker_name !== 'shoonya' && (
+                  <div>
+                    <label className="block text-sm font-medium text-bronze-700 mb-2">
+                      API Secret
+                    </label>
+                    <div className="relative">
+                      <input
+                        {...register('apiSecret')}
+                        type={showApiSecret ? 'text' : 'password'}
+                        className="w-full px-4 py-3 pr-12 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                        placeholder="Enter new API secret"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiSecret(!showApiSecret)}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-bronze-400 hover:text-bronze-600 transition-colors"
+                      >
+                        {showApiSecret ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Redirect URI field - only for Upstox */}
                 {editingConnection?.broker_name === 'upstox' && (
@@ -1327,19 +1366,14 @@ const BrokerConnection: React.FC = () => {
                         placeholder="Enter IMEI (optional)"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-bronze-700 mb-2">
-                        2FA/TOTP
-                      </label>
-                      <input
-                        {...register('twoFA', { required: '2FA/TOTP is required for Shoonya' })}
-                        type="text"
-                        className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
-                        placeholder="Enter 2FA/TOTP code"
-                      />
-                      {errors.twoFA && (
-                        <p className="mt-1 text-sm text-red-600">{errors.twoFA.message}</p>
-                      )}
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600" />
+                        <span className="text-amber-700 text-sm font-medium">Authentication Note</span>
+                      </div>
+                      <p className="text-amber-600 text-xs">
+                        Password and 2FA/TOTP will be requested during the authentication process.
+                      </p>
                     </div>
                   </>
                 )}
@@ -1463,8 +1497,16 @@ const ShoonyaAuthModal: React.FC<{
   onSubmit: (data: any) => void;
   onClose: () => void;
   isLoading: boolean;
-}> = ({ onSubmit, onClose, isLoading }) => {
-  const { register, handleSubmit, formState: { errors } } = useForm();
+  storedCredentials?: any;
+}> = ({ onSubmit, onClose, isLoading, storedCredentials }) => {
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    defaultValues: {
+      userId: storedCredentials?.user_id_broker || '',
+      vendorCode: storedCredentials?.vendor_code || '',
+      apiKey: storedCredentials?.api_key || '',
+      imei: storedCredentials?.imei || ''
+    }
+  });
 
   return (
     <motion.div
@@ -1484,24 +1526,38 @@ const ShoonyaAuthModal: React.FC<{
           <button onClick={onClose} className="text-bronze-600 hover:text-bronze-500">✕</button>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-bronze-700 mb-2">User ID</label>
-            <input
-              {...register('userId', { required: 'User ID is required' })}
-              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
-              placeholder="Enter your user ID"
-            />
-            {errors.userId && <p className="text-red-600 text-sm mt-1">{errors.userId.message}</p>}
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+          <div className="flex items-center space-x-2 mb-2">
+            <AlertCircle className="w-4 h-4 text-amber-600" />
+            <span className="text-amber-700 text-sm font-medium">Authentication Required</span>
           </div>
+          <p className="text-amber-600 text-xs">
+            Your stored credentials will be used. Only enter your current Password and 2FA/TOTP code.
+          </p>
+        </div>
 
+        {/* Pre-filled credentials info */}
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+          <div className="flex items-center space-x-2 mb-2">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            <span className="text-green-700 text-sm font-medium">Stored Credentials</span>
+          </div>
+          <div className="text-xs text-green-600 space-y-1">
+            <p><strong>User ID:</strong> {storedCredentials?.user_id_broker || 'Not set'}</p>
+            <p><strong>Vendor Code:</strong> {storedCredentials?.vendor_code || 'Not set'}</p>
+            <p><strong>API Key:</strong> {storedCredentials?.api_key ? '●●●●●●●●' : 'Not set'}</p>
+            {storedCredentials?.imei && <p><strong>IMEI:</strong> {storedCredentials.imei}</p>}
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-bronze-700 mb-2">Password</label>
             <input
               {...register('password', { required: 'Password is required' })}
               type="password"
-              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
-              placeholder="Enter your password"
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+              placeholder="Enter your current password"
             />
             {errors.password && <p className="text-red-600 text-sm mt-1">{errors.password.message}</p>}
           </div>
@@ -1510,54 +1566,24 @@ const ShoonyaAuthModal: React.FC<{
             <label className="block text-sm font-medium text-bronze-700 mb-2">2FA/TOTP</label>
             <input
               {...register('twoFA', { required: '2FA is required' })}
-              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
+              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
               placeholder="Enter 2FA/TOTP code"
             />
             {errors.twoFA && <p className="text-red-600 text-sm mt-1">{errors.twoFA.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-bronze-700 mb-2">Vendor Code</label>
-            <input
-              {...register('vendorCode', { required: 'Vendor code is required' })}
-              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
-              placeholder="Enter vendor code"
-            />
-            {errors.vendorCode && <p className="text-red-600 text-sm mt-1">{errors.vendorCode.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-bronze-700 mb-2">API Secret</label>
-            <input
-              {...register('apiSecret', { required: 'API secret is required' })}
-              type="password"
-              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
-              placeholder="Enter API secret"
-            />
-            {errors.apiSecret && <p className="text-red-600 text-sm mt-1">{errors.apiSecret.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-bronze-700 mb-2">IMEI (Optional)</label>
-            <input
-              {...register('imei')}
-              className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl"
-              placeholder="Enter IMEI (optional)"
-            />
           </div>
 
           <div className="flex space-x-4">
             <button
               type="submit"
               disabled={isLoading}
-              className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium disabled:opacity-50"
+              className="flex-1 bg-gradient-to-r from-amber-500 to-bronze-600 text-white py-3 rounded-xl font-medium disabled:opacity-50 shadow-3d hover:shadow-3d-hover transition-all"
             >
               {isLoading ? 'Authenticating...' : 'Authenticate'}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="px-6 py-3 bg-beige-100 text-bronze-700 rounded-xl font-medium"
+              className="px-6 py-3 bg-beige-100 text-bronze-700 rounded-xl font-medium border border-beige-200 hover:bg-beige-200 transition-colors"
             >
               Cancel
             </button>
