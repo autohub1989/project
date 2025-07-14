@@ -181,9 +181,8 @@ export const initDatabase = async () => {
     `);
 
     // Enhanced Broker connections table with connection_name for multiple connections
-    logger.debug('Dropping existing broker_connections table if it exists');
-    await db.runAsync(`DROP TABLE IF EXISTS broker_connections`);
-    logger.debug('Creating broker_connections table');
+    // Enhanced Broker connections table with connection_name for multiple connections
+    logger.debug('Creating broker_connections table if it doesn\'t exist');
     await db.runAsync(`
       CREATE TABLE IF NOT EXISTS broker_connections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

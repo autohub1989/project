@@ -943,6 +943,11 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
         logger.info('Shoonya reconnection requires manual authentication');
         console.log('✅ Shoonya requires manual authentication');
 
+        // Extract stored credentials to simplify reconnection
+        const userId = connection.user_id_broker;
+        const vendorCode = connection.vendor_code;
+        const imei = connection.imei || '';
+
         res.json({
           message: 'Please complete authentication to reconnect your Shoonya account.',
           requiresAuth: true,
@@ -950,7 +955,13 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           reconnect: true,
           brokerName: 'Shoonya',
           connectionId,
-          cacheCleared
+          cacheCleared,
+          // Include stored credentials to simplify the reconnection form
+          storedCredentials: {
+            userId,
+            vendorCode,
+            hasImei: !!imei
+          }
         });
       } else {
         logger.warn('Unsupported broker for reconnection', { broker: connection.broker_name });
@@ -1747,20 +1758,53 @@ router.post('/auth/angel/login', authenticateToken, async (req, res) => {
   }
 });
 
-// Shoonya manual authentication endpoint
-router.post('/auth/shoonya/login', authenticateToken, async (req, res) => {
+// Test Shoonya API credentials
+router.post('/auth/shoonya/test-credentials', authenticateToken, async (req, res) => {
   try {
-    const { connectionId, userId, password, twoFA, vendorCode, apiSecret, imei } = req.body;
+    const { userId, apiSecret, vendorCode } = req.body;
 
-    logger.info('Shoonya manual authentication:', { connectionId, userId });
-
-    if (!connectionId || !userId || !password || !vendorCode || !apiSecret) {
+    if (!userId || !apiSecret || !vendorCode) {
       return res.status(400).json({ 
-        error: 'Connection ID, user ID, password, vendor code, and API secret are required' 
+        error: 'User ID, API secret, and vendor code are required' 
       });
     }
 
-    // Get broker connection
+    logger.info('Testing Shoonya API credentials');
+    
+    const result = await shoonyaService.testApiCredentials(userId, apiSecret, vendorCode);
+    
+    return res.json({
+      success: true,
+      message: 'API credentials format is valid',
+      data: result
+    });
+  } catch (error) {
+    logger.error('Failed to test Shoonya API credentials:', error);
+    return res.status(500).json({ 
+      error: 'Failed to test API credentials', 
+      message: error.message 
+    });
+  }
+});
+
+// Shoonya manual authentication endpoint
+router.post('/auth/shoonya/login', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId, password, twoFA } = req.body;
+
+    logger.info('Shoonya manual authentication:', { 
+      connectionId, 
+      hasPassword: !!password,
+      hasTwoFA: !!twoFA
+    });
+
+    if (!connectionId || !password) {
+      return res.status(400).json({ 
+        error: 'Connection ID and password are required' 
+      });
+    }
+
+    // Get broker connection with all stored details
     const connection = await db.getAsync(
       'SELECT * FROM broker_connections WHERE id = ? AND user_id = ?',
       [connectionId, req.user.id]
@@ -1770,15 +1814,53 @@ router.post('/auth/shoonya/login', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Broker connection not found' });
     }
 
+    // Extract all required parameters from the connection
+    const userId = connection.user_id_broker;
+    const vendorCode = connection.vendor_code;
+    const imei = connection.imei || '';
+    
+    // Validate required parameters
+    if (!userId || !vendorCode) {
+      return res.status(400).json({ 
+        error: 'Missing required parameters in broker connection. Please update your connection details.' 
+      });
+    }
+    
+    // Validate vendor code format
+    if (vendorCode.length < 2 || vendorCode.length > 10) {
+      logger.warn('Vendor code may be invalid:', { vendorCode, length: vendorCode.length });
+    }
+
     try {
-      // Decrypt credentials
-      const apiKey = decryptData(connection.api_key);
+      // Decrypt credentials if needed
+      let apiSecret;
       
-      logger.info('Generating session token for Shoonya connection:', connectionId);
+      // Check if we have encrypted_api_secret or use api_key as fallback
+      if (connection.encrypted_api_secret) {
+        apiSecret = decryptData(connection.encrypted_api_secret);
+        logger.debug('Using encrypted_api_secret for Shoonya authentication');
+      } else if (connection.api_key) {
+        apiSecret = decryptData(connection.api_key);
+        logger.debug('Using api_key as api_secret for Shoonya authentication');
+      } else {
+        // For Shoonya, API secret is optional
+        apiSecret = '';
+        logger.debug('No API secret found for Shoonya connection, continuing without it');
+      }
+      
+      // Log connection details for debugging
+      logger.info('Generating session token for Shoonya connection:', {
+        connectionId,
+        userId,
+        vendorCode,
+        hasApiSecret: !!apiSecret,
+        apiSecretLength: apiSecret ? apiSecret.length : 0
+      });
       
       // Generate session token using Shoonya API
+      // Parameters: userId, password, twoFA, vendorCode, apiSecret, imei
       const sessionResponse = await shoonyaService.generateSessionToken(
-        apiKey, userId, password, twoFA, vendorCode, apiSecret, imei
+        userId, password, twoFA, vendorCode, apiSecret, imei
       );
       
       if (!sessionResponse || !sessionResponse.session_token) {
@@ -1796,7 +1878,7 @@ router.post('/auth/shoonya/login', authenticateToken, async (req, res) => {
       // Store session token and user ID
       await db.runAsync(`
         UPDATE broker_connections 
-        SET access_token = ?, user_id_broker = ?, access_token_expires_at = ?, is_active = 1, is_authenticated = 1, updated_at = CURRENT_TIMESTAMP 
+        SET access_token = ?, user_id_broker = ?, access_token_expires_at = ?, is_active = 1, is_authenticated = 1
         WHERE id = ?
       `, [encryptData(sessionToken), userId, expiresAt, connectionId]);
 
@@ -1814,9 +1896,26 @@ router.post('/auth/shoonya/login', authenticateToken, async (req, res) => {
 
     } catch (authError) {
       logger.error('Shoonya authentication error:', authError);
-      res.status(500).json({
-        error: 'Authentication failed',
-        message: authError.message
+      
+      // Provide more specific error messages based on the error
+      let statusCode = 500;
+      let errorMessage = 'Authentication failed';
+      
+      if (authError.message.includes('Invalid Vendor code')) {
+        statusCode = 400;
+        errorMessage = 'Invalid vendor code. Please check your vendor code and try again.';
+      } else if (authError.message.includes('Invalid App Key')) {
+        statusCode = 400;
+        errorMessage = 'Invalid API secret or user ID. Please check your credentials and try again.';
+      } else if (authError.message.includes('Invalid Input')) {
+        statusCode = 400;
+        errorMessage = 'Invalid input parameters. Please check all your credentials and try again.';
+      }
+      
+      res.status(statusCode).json({
+        error: errorMessage,
+        message: authError.message,
+        details: 'Please use the test-credentials endpoint to validate your API credentials format.'
       });
     }
 

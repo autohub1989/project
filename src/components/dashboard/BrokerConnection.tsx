@@ -1078,6 +1078,65 @@ const BrokerConnection: React.FC = () => {
                       )}
                     </div>
 
+                    {/* Shoonya-specific fields */}
+                    {selectedBroker === 'shoonya' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-bronze-700 mb-2">
+                            Vendor Code
+                          </label>
+                          <input
+                            {...register('vendorCode', { required: 'Vendor code is required for Shoonya' })}
+                            type="text"
+                            className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                            placeholder="Enter vendor code"
+                          />
+                          {errors.vendorCode && (
+                            <p className="mt-1 text-sm text-red-600">{errors.vendorCode.message}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-bronze-700 mb-2">
+                            Password
+                          </label>
+                          <input
+                            {...register('password', { required: 'Password is required for Shoonya' })}
+                            type="password"
+                            className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                            placeholder="Enter your Shoonya password"
+                          />
+                          {errors.password && (
+                            <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-bronze-700 mb-2">
+                            IMEI (Optional)
+                          </label>
+                          <input
+                            {...register('imei')}
+                            type="text"
+                            className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                            placeholder="Enter IMEI (optional)"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-bronze-700 mb-2">
+                            2FA/TOTP
+                          </label>
+                          <input
+                            {...register('twoFA', { required: '2FA/TOTP is required for Shoonya' })}
+                            type="text"
+                            className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                            placeholder="Enter 2FA/TOTP code"
+                          />
+                          {errors.twoFA && (
+                            <p className="mt-1 text-sm text-red-600">{errors.twoFA.message}</p>
+                          )}
+                        </div>
+                      </>
+                    )}
+
                     <div className="flex space-x-4">
                       <motion.button
                         whileHover={{ scale: 1.02 }}
@@ -1239,6 +1298,51 @@ const BrokerConnection: React.FC = () => {
                     <p className="mt-1 text-sm text-red-600">{errors.userId.message}</p>
                   )}
                 </div>
+
+                {/* Shoonya-specific fields */}
+                {editingConnection.broker_name === 'shoonya' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-bronze-700 mb-2">
+                        Vendor Code
+                      </label>
+                      <input
+                        {...register('vendorCode', { required: 'Vendor code is required for Shoonya' })}
+                        type="text"
+                        className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                        placeholder="Enter vendor code"
+                      />
+                      {errors.vendorCode && (
+                        <p className="mt-1 text-sm text-red-600">{errors.vendorCode.message}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-bronze-700 mb-2">
+                        IMEI (Optional)
+                      </label>
+                      <input
+                        {...register('imei')}
+                        type="text"
+                        className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                        placeholder="Enter IMEI (optional)"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-bronze-700 mb-2">
+                        2FA/TOTP
+                      </label>
+                      <input
+                        {...register('twoFA', { required: '2FA/TOTP is required for Shoonya' })}
+                        type="text"
+                        className="w-full px-4 py-3 bg-cream-50 border border-beige-200 rounded-xl text-bronze-800 placeholder-bronze-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent backdrop-blur-sm"
+                        placeholder="Enter 2FA/TOTP code"
+                      />
+                      {errors.twoFA && (
+                        <p className="mt-1 text-sm text-red-600">{errors.twoFA.message}</p>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 <div className="flex space-x-4">
                   <motion.button

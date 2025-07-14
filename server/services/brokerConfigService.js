@@ -47,8 +47,8 @@ class BrokerConfigService {
       shoonya: {
         name: 'Shoonya',
         authMethod: 'manual',
-        requiredFields: ['api_key', 'user_id_broker', 'password', 'vendor_code', 'imei'],
-        optionalFields: ['two_fa'],
+        requiredFields: ['user_id_broker', 'password', 'vendor_code'],
+        optionalFields: ['two_fa', 'api_key', 'api_secret', 'imei'],
         authUrl: null,
         baseUrl: 'https://api.shoonya.com',
         webhookFormat: 'shoonya',
