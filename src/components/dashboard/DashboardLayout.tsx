@@ -23,6 +23,7 @@ const DashboardLayout: React.FC = () => {
     { name: 'Positions', href: '/dashboard/positions', icon: Activity },
     { name: 'P&L Analytics', href: '/dashboard/pnl', icon: BarChart3 },
     { name: 'Broker Connection', href: '/dashboard/brokers', icon: LinkIcon },
+    { name: 'Webhook Syntax', href: '/dashboard/webhook-syntax', icon: Code },
     { name: 'Settings', href: '/dashboard/settings', icon: Settings },
   ];
 
