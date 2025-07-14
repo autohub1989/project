@@ -612,7 +612,7 @@ router.post('/connect', authenticateToken, async (req, res) => {
     // Get broker configuration
     const brokerConfig = brokerConfigService.getBrokerConfig(brokerName);
     
-    // Validate required fields
+    // Validate required fields for initial connection
     const validation = brokerConfigService.validateBrokerData(brokerName, {
       api_key: apiKey,
       api_secret: apiSecret,
@@ -625,9 +625,14 @@ router.post('/connect', authenticateToken, async (req, res) => {
       imei: imei,
       redirect_uri: redirectUri,
       app_key: appKey
-    });
+    }, true); // Pass true for isInitialConnection
 
     if (!validation.isValid) {
+      logger.warn('Broker connection validation failed:', {
+        brokerName,
+        validationErrors: validation.errors,
+        submittedData: Object.keys(req.body)
+      });
       return res.status(400).json({ 
         error: 'Validation failed', 
         details: validation.errors 
@@ -763,13 +768,55 @@ router.post('/connect', authenticateToken, async (req, res) => {
         [connectionId]
       );
       
+      // For Shoonya, if all required fields are present, attempt direct login
+      if (brokerName.toLowerCase() === 'shoonya' && userId && password && twoFA && vendorCode) {
+        try {
+          // Generate session token using Shoonya service
+          const sessionData = await shoonyaService.generateSessionToken(
+            userId,
+            password,
+            twoFA,
+            vendorCode,
+            apiSecret || '',
+            imei || ''
+          );
+
+          // Update connection with session token
+          const expiresAt = Math.floor(Date.now() / 1000) + (8 * 60 * 60); // 8 hours from now
+          
+          await db.runAsync(`
+            UPDATE broker_connections 
+            SET access_token = ?, access_token_expires_at = ?, is_authenticated = 1, last_sync = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `, [
+            encryptData(sessionData.access_token),
+            expiresAt,
+            connectionId
+          ]);
+
+          res.json({
+            success: true,
+            message: 'Shoonya broker connected successfully!',
+            connectionId,
+            webhookUrl,
+            requiresAuth: false,
+            authenticated: true
+          });
+          return;
+        } catch (shoonyaError) {
+          logger.error('Shoonya direct login failed:', shoonyaError);
+          // Fall back to manual authentication
+        }
+      }
+      
       res.json({
         success: true,
         message: 'Broker connection created. Manual authentication required.',
         connectionId,
         webhookUrl,
         requiresAuth: true,
-        authMethod: 'manual'
+        authMethod: 'manual',
+        authType: 'credentials'
       });
     }
   } catch (error) {
@@ -947,6 +994,7 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
         const userId = connection.user_id_broker;
         const vendorCode = connection.vendor_code;
         const imei = connection.imei || '';
+        const apiSecret = connection.encrypted_api_secret ? decryptData(connection.encrypted_api_secret) : '';
 
         res.json({
           message: 'Please complete authentication to reconnect your Shoonya account.',
@@ -960,6 +1008,8 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           storedCredentials: {
             userId,
             vendorCode,
+            apiSecret,
+            imei,
             hasImei: !!imei
           }
         });
