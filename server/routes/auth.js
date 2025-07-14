@@ -5,8 +5,12 @@ import crypto from 'crypto';
 import { db } from '../database/init.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { sendOTP, sendPasswordResetOTP } from '../services/emailService.js';
+import shoonyaService from '../services/shoonyaService.js';
+import { encryptData, decryptData } from '../utils/encryption.js';
+import { createLogger } from '../utils/logger.js';
 
 const router = express.Router();
+const logger = createLogger('AUTH');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
 // REGISTER - Step 1: Store pending registration and send OTP
@@ -404,6 +408,93 @@ router.post('/forgot-password', async (req, res) => {
   } catch (error) {
     console.error('Forgot password error:', error);
     res.status(500).json({ error: 'Forgot password request failed' });
+  }
+});
+
+// SHOONYA LOGIN - Specific endpoint for Shoonya broker authentication
+router.post('/shoonya/login', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId, userId, password, twoFA, vendorCode, apiSecret, imei } = req.body;
+
+    if (!connectionId || !userId || !password || !twoFA || !vendorCode) {
+      return res.status(400).json({ 
+        error: 'Connection ID, User ID, Password, 2FA/TOTP, and Vendor Code are required' 
+      });
+    }
+
+    // Verify connection belongs to user
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ?',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found' });
+    }
+
+    if (connection.broker_name.toLowerCase() !== 'shoonya') {
+      return res.status(400).json({ error: 'This endpoint is only for Shoonya broker' });
+    }
+
+    // Get stored credentials from connection
+    const storedApiKey = connection.encrypted_api_key ? decryptData(connection.encrypted_api_key) : '';
+    const storedApiSecret = connection.encrypted_api_secret ? decryptData(connection.encrypted_api_secret) : '';
+    const storedUserId = connection.user_id_broker || userId;
+    const storedVendorCode = connection.vendor_code || vendorCode;
+    const storedImei = connection.imei || imei;
+
+    // For Shoonya, use API key as the secret for app key hash generation
+    const apiSecretForHash = storedApiSecret || storedApiKey;
+
+    logger.info('Shoonya authentication parameters:', {
+      userId: storedUserId,
+      vendorCode: storedVendorCode,
+      hasApiKey: !!storedApiKey,
+      hasApiSecret: !!storedApiSecret,
+      hasApiSecretForHash: !!apiSecretForHash,
+      hasPassword: !!password,
+      hasTwoFA: !!twoFA,
+      hasImei: !!storedImei
+    });
+
+    // Generate session token using Shoonya service
+    const sessionData = await shoonyaService.generateSessionToken(
+      storedUserId,
+      password,
+      twoFA,
+      storedVendorCode,
+      apiSecretForHash,
+      storedImei
+    );
+
+    // Update connection with session token
+    const expiresAt = Math.floor(Date.now() / 1000) + (8 * 60 * 60); // 8 hours from now
+    
+    await db.runAsync(`
+      UPDATE broker_connections 
+      SET access_token = ?, access_token_expires_at = ?, is_authenticated = 1, last_sync = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [
+      encryptData(sessionData.access_token),
+      expiresAt,
+      connectionId
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Shoonya authentication successful',
+      sessionData: {
+        user_id: sessionData.user_id,
+        account_id: sessionData.account_id
+      }
+    });
+
+  } catch (error) {
+    logger.error('Shoonya login error:', error);
+    res.status(500).json({ 
+      error: 'Shoonya authentication failed', 
+      details: error.message 
+    });
   }
 });
 
