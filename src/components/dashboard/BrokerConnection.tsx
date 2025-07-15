@@ -10,6 +10,33 @@ import {
 import { brokerAPI } from '../../services/api';
 import toast from 'react-hot-toast';
 
+
+
+// Place this above or outside your main component (or in a separate file if needed)
+const ConnectionButton = ({
+  onClick,
+  disabled = false,
+  hoverScale = 1.05,
+  tapScale = 0.95,
+  className = '',
+  icon: Icon,
+  iconAnimation = '',
+  children,
+}) => (
+  <motion.button
+    onClick={onClick}
+    disabled={disabled}
+    whileHover={{ scale: hoverScale }}
+    whileTap={{ scale: tapScale }}
+    className={`flex items-center justify-center space-x-1 text-sm py-2 px-3 rounded-lg transition-colors shadow-3d ${className} ${
+      disabled ? 'opacity-50' : ''
+    }`}
+  >
+    {Icon && <Icon className={`w-4 h-4 ${iconAnimation}`} />}
+    <span>{children}</span>
+  </motion.button>
+);
+
 interface BrokerConnectionForm {
   brokerName: string;
   apiKey: string;
@@ -739,72 +766,69 @@ const BrokerConnection: React.FC = () => {
                   )}
 
                   {/* Action Buttons */}
+                  {/* Replace your entire original block with this */}
                   <div className="space-y-2">
-                    {connection.is_authenticated && !statusInfo.needsReconnect && (
+                    {connection.is_authenticated && !statusInfo.needsReconnect ? (
                       <div className="grid grid-cols-2 gap-2">
-                        <motion.button 
+                        <ConnectionButton
                           onClick={() => syncPositions(connection.id)}
                           disabled={syncingConnection === connection.id}
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          className="bg-amber-500 text-white py-2 px-3 rounded-lg hover:bg-amber-600 transition-colors flex items-center justify-center space-x-1 text-sm disabled:opacity-50 shadow-3d"
+                          icon={RefreshCw}
+                          iconAnimation={syncingConnection === connection.id ? 'animate-spin' : ''}
+                          className="bg-amber-500 text-white hover:bg-amber-600"
                         >
-                          <RefreshCw className={`w-3 h-3 ${syncingConnection === connection.id ? 'animate-spin' : ''}`} />
-                          <span>Sync</span>
-                        </motion.button>
+                          Sync
+                        </ConnectionButton>
 
-                        <motion.button
+                        <ConnectionButton
                           onClick={() => testConnection(connection.id)}
                           disabled={testingConnection === connection.id}
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          className="bg-blue-500 text-white py-2 px-3 rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center space-x-1 text-sm disabled:opacity-50 shadow-3d"
+                          icon={TestTube}
+                          iconAnimation={testingConnection === connection.id ? 'animate-pulse' : ''}
+                          className="bg-blue-500 text-white hover:bg-blue-600"
                         >
-                          <TestTube className={`w-3 h-3 ${testingConnection === connection.id ? 'animate-pulse' : ''}`} />
-                          <span>Test</span>
-                        </motion.button>
+                          Test
+                        </ConnectionButton>
                       </div>
-                    )}
+                    ) : null}
 
-                    <motion.button 
+                    <ConnectionButton
                       onClick={() => handleEditConnection(connection)}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className="w-full bg-bronze-500 text-white py-2 rounded-lg hover:bg-bronze-600 transition-colors flex items-center justify-center space-x-2 text-sm shadow-3d"
+                      icon={Edit3}
+                      className="w-full bg-bronze-500 text-white hover:bg-bronze-600 space-x-2"
+                      hoverScale={1.02}
+                      tapScale={0.98}
                     >
-                      <Edit3 className="w-4 h-4" />
-                      <span>Edit Settings</span>
-                    </motion.button>
-                    
-                    {/* Connection Management Buttons */}
+                      Edit Settings
+                    </ConnectionButton>
+
                     {connection.is_active ? (
-                      <motion.button
+                      <ConnectionButton
                         onClick={() => disconnectBroker(connection.id)}
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        className="w-full bg-red-100 text-red-600 py-2 rounded-lg hover:bg-red-200 transition-colors text-sm border border-red-200"
+                        icon={null}
+                        className="w-full bg-red-100 text-red-600 hover:bg-red-200 border border-red-200"
+                        hoverScale={1.02}
+                        tapScale={0.98}
                       >
                         Disconnect
-                      </motion.button>
+                      </ConnectionButton>
                     ) : (
                       <div className="space-y-2">
-                        <motion.button
+                        <ConnectionButton
                           onClick={() => deleteBrokerConnection(connection.id)}
                           disabled={deletingConnection === connection.id}
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
-                          className="w-full bg-red-500 text-white py-2 rounded-lg hover:bg-red-600 transition-colors flex items-center justify-center space-x-1 text-sm disabled:opacity-50 shadow-3d"
+                          icon={deletingConnection === connection.id ? RefreshCw : Trash2}
+                          iconAnimation={deletingConnection === connection.id ? 'animate-spin' : ''}
+                          className="w-full bg-red-500 text-white hover:bg-red-600"
+                          hoverScale={1.02}
+                          tapScale={0.98}
                         >
-                          {deletingConnection === connection.id ? (
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-4 h-4" />
-                          )}
-                          <span>Delete</span>
-                        </motion.button>
+                          Delete
+                        </ConnectionButton>
                       </div>
                     )}
                   </div>
+
                 </motion.div>
               );
             })}
