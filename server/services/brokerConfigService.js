@@ -47,8 +47,8 @@ class BrokerConfigService {
       shoonya: {
         name: 'Shoonya',
         authMethod: 'manual',
-        requiredFields: ['api_key', 'user_id_broker', 'password', 'vendor_code', 'two_fa'],
-        optionalFields: ['api_secret', 'imei'],
+        requiredFields: ['api_key', 'user_id_broker', 'vendor_code', 'imei'],
+        optionalFields: ['api_secret'],
         authUrl: null,
         baseUrl: 'https://api.shoonya.com',
         webhookFormat: 'shoonya',
@@ -220,7 +220,7 @@ class BrokerConfigService {
   }
 
   getWebhookUrl(userId, connectionId) {
-    const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://your-domain.com';
+    const baseUrl = process.env.WEBHOOK_BASE_URL || 'http://localhost:3001';
     return `${baseUrl}/api/webhook/${userId}/${connectionId}`;
   }
 }
