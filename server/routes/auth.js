@@ -414,11 +414,11 @@ router.post('/forgot-password', async (req, res) => {
 // SHOONYA LOGIN - Specific endpoint for Shoonya broker authentication
 router.post('/shoonya/login', authenticateToken, async (req, res) => {
   try {
-    const { connectionId, userId, password, twoFA, vendorCode, apiSecret, imei } = req.body;
+    const { connectionId, password, twoFA } = req.body;
 
-    if (!connectionId || !userId || !password || !twoFA || !vendorCode) {
+    if (!connectionId || !password || !twoFA) {
       return res.status(400).json({ 
-        error: 'Connection ID, User ID, Password, 2FA/TOTP, and Vendor Code are required' 
+        error: 'Connection ID, Password, and 2FA/TOTP are required' 
       });
     }
 
@@ -436,14 +436,27 @@ router.post('/shoonya/login', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'This endpoint is only for Shoonya broker' });
     }
 
-    // Get stored credentials from connection
-    const storedApiKey = connection.encrypted_api_key ? decryptData(connection.encrypted_api_key) : '';
+    // Get stored credentials from connection (all should be available from first step)
+    const storedApiKey = connection.api_key ? decryptData(connection.api_key) : '';
     const storedApiSecret = connection.encrypted_api_secret ? decryptData(connection.encrypted_api_secret) : '';
-    const storedUserId = connection.user_id_broker || userId;
-    const storedVendorCode = connection.vendor_code || vendorCode;
-    const storedImei = connection.imei || imei;
+    const storedUserId = connection.user_id_broker;
+    const storedVendorCode = connection.vendor_code;
+    const storedImei = connection.imei;
 
-    // For Shoonya, use API key as the secret for app key hash generation
+    // Validate that all required stored credentials are present
+    if (!storedUserId || !storedVendorCode || !storedApiKey || !storedImei) {
+      return res.status(400).json({ 
+        error: 'Missing stored credentials. Please reconnect your account.',
+        details: {
+          hasUserId: !!storedUserId,
+          hasVendorCode: !!storedVendorCode,
+          hasApiKey: !!storedApiKey,
+          hasImei: !!storedImei
+        }
+      });
+    }
+
+    // For Shoonya, use API key as the secret for app key hash generation if no API secret
     const apiSecretForHash = storedApiSecret || storedApiKey;
 
     logger.info('Shoonya authentication parameters:', {
