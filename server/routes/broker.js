@@ -244,7 +244,7 @@ router.get('/connections/:id', authenticateToken, async (req, res) => {
     const connection = await db.getAsync(`
       SELECT 
         id, broker_name, connection_name, is_active, created_at, last_sync, webhook_url,
-        user_id_broker, access_token_expires_at,
+        user_id_broker, vendor_code, imei, api_key, access_token_expires_at,
         CASE WHEN access_token IS NOT NULL AND access_token != '' THEN 1 ELSE 0 END as is_authenticated
       FROM broker_connections 
       WHERE id = ? AND user_id = ?
@@ -257,6 +257,16 @@ router.get('/connections/:id', authenticateToken, async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
     connection.token_expired = connection.access_token_expires_at && connection.access_token_expires_at < now;
     connection.needs_token_refresh = connection.access_token_expires_at && (connection.access_token_expires_at - now) < 3600;
+
+    // For Shoonya connections, decrypt the API key for display
+    if (connection.broker_name.toLowerCase() === 'shoonya' && connection.api_key) {
+      try {
+        connection.api_key = decryptData(connection.api_key);
+      } catch (decryptError) {
+        logger.warn('Failed to decrypt API key for connection details:', decryptError);
+        connection.api_key = null;
+      }
+    }
 
     res.json({ connection });
   } catch (error) {
@@ -768,46 +778,8 @@ router.post('/connect', authenticateToken, async (req, res) => {
         [connectionId]
       );
       
-      // For Shoonya, if all required fields are present, attempt direct login
-      if (brokerName.toLowerCase() === 'shoonya' && userId && password && twoFA && vendorCode) {
-        try {
-          // Generate session token using Shoonya service
-          const sessionData = await shoonyaService.generateSessionToken(
-            userId,
-            password,
-            twoFA,
-            vendorCode,
-            apiSecret || '',
-            imei || ''
-          );
-
-          // Update connection with session token
-          const expiresAt = Math.floor(Date.now() / 1000) + (8 * 60 * 60); // 8 hours from now
-          
-          await db.runAsync(`
-            UPDATE broker_connections 
-            SET access_token = ?, access_token_expires_at = ?, is_authenticated = 1, last_sync = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `, [
-            encryptData(sessionData.access_token),
-            expiresAt,
-            connectionId
-          ]);
-
-          res.json({
-            success: true,
-            message: 'Shoonya broker connected successfully!',
-            connectionId,
-            webhookUrl,
-            requiresAuth: false,
-            authenticated: true
-          });
-          return;
-        } catch (shoonyaError) {
-          logger.error('Shoonya direct login failed:', shoonyaError);
-          // Fall back to manual authentication
-        }
-      }
+      // For Shoonya, always require manual authentication in second step
+      // Data is already saved in DB above
       
       res.json({
         success: true,
@@ -994,6 +966,7 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
         const userId = connection.user_id_broker;
         const vendorCode = connection.vendor_code;
         const imei = connection.imei || '';
+        const storedApiKey = connection.api_key ? decryptData(connection.api_key) : '';
         const apiSecret = connection.encrypted_api_secret ? decryptData(connection.encrypted_api_secret) : '';
 
         res.json({
@@ -1006,11 +979,10 @@ router.post('/reconnect/:connectionId', authenticateToken, async (req, res) => {
           cacheCleared,
           // Include stored credentials to simplify the reconnection form
           storedCredentials: {
-            userId,
-            vendorCode,
-            apiSecret,
-            imei,
-            hasImei: !!imei
+            user_id_broker: userId,
+            vendor_code: vendorCode,
+            api_key: storedApiKey,
+            imei: imei
           }
         });
       } else {
