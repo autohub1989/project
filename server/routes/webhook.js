@@ -90,7 +90,7 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
     formatted = {
       exch: payload.exchange || 'NSE',
       tsym: symbolStr,
-      qty: parseInt(payload.quantity),
+      qty: parseInt(payload.quantity).toString(),
       prc: payload.order_type === 'LMT' ? parseFloat(payload.price || 0).toString() : '0',
       prd: payload.product === 'MIS' ? 'I' : (payload.product === 'CNC' ? 'C' : 'I'), // I=Intraday, C=CNC, M=Margin
       trantype: payload.action.toUpperCase() === 'BUY' ? 'B' : 'S', // B=Buy, S=Sell
@@ -246,11 +246,14 @@ router.post('/:userId/:webhookId', async (req, res) => {
       `INSERT INTO orders (user_id, broker_connection_id, symbol, exchange, quantity, order_type, transaction_type, product, price, trigger_price, status, webhook_data)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, brokerConnection.id, 
-        orderParams.tradingsymbol || orderParams.instrument_token || orderParams.symbol, 
-        orderParams.exchange || 'NSE', 
-        orderParams.quantity,
-        orderParams.order_type, orderParams.transaction_type, orderParams.product, orderParams.price,
-        orderParams.trigger_price, 'PENDING', JSON.stringify(payload)]
+        orderParams.tradingsymbol || orderParams.instrument_token || orderParams.symbol || orderParams.tsym, 
+        orderParams.exchange || orderParams.exch || 'NSE', 
+        orderParams.quantity || orderParams.qty,
+        orderParams.order_type || orderParams.prctyp, 
+        orderParams.transaction_type || orderParams.trantype, 
+        orderParams.product || orderParams.prd, 
+        orderParams.price || orderParams.prc,
+        orderParams.trigger_price || orderParams.trgprc, 'PENDING', JSON.stringify(payload)]
     );
     const orderId = orderResult.lastID;
     await db.runAsync('UPDATE webhook_logs SET order_id = ? WHERE id = ?', [orderId, logId]);
