@@ -11,7 +11,7 @@ class ShoonyaService {
     this.shoonyaInstances = new Map(); // Store Shoonya instances per connection
     this.baseURL = 'https://api.shoonya.com/NorenWClientTP';
     
-    // Define API routes
+    // Define API routes - Updated as per latest GitHub API
     this.routes = {
       'authorize': '/QuickAuth',
       'logout': '/Logout',
@@ -40,40 +40,27 @@ class ShoonyaService {
   }
 
   // Generate session token using login credentials
-  // Exactly matching the provided NorenRestApi implementation
+  // Updated to match exactly with the latest GitHub API implementation
   async generateSessionToken(userId, password, twoFA, vendorCode, apiSecret, imei = '') {
     try {
       logger.info('Generating Shoonya session token');
       
-      // Create password hash as per Shoonya documentation
+      // Create password hash using SHA256 as per Shoonya documentation
       const pwd = crypto.createHash('sha256').update(password).digest('hex');
       
-      // Validate parameters
+      // Validate required parameters
       if (!userId) throw new Error('User ID is required for Shoonya login');
       if (!password) throw new Error('Password is required for Shoonya login');
       if (!vendorCode) throw new Error('Vendor code is required for Shoonya login');
+      if (!apiSecret) throw new Error('API secret is required for Shoonya login to generate app key hash');
       
-      // API secret is required for Shoonya app key generation
-      if (!apiSecret) {
-        throw new Error('API secret is required for Shoonya login to generate app key hash');
-      }
-      
-      // Create app key hash using userId and apiSecret
+      // Create app key hash using userId and apiSecret - exactly as in GitHub API
       const u_app_key = `${userId}|${apiSecret}`;
       const appkey_hash = crypto.createHash('sha256').update(u_app_key).digest('hex');
       
-      logger.info('App key hash generation:', {
-        userId,
-        apiSecretLength: apiSecret ? apiSecret.length : 0,
-        u_app_key_length: u_app_key.length,
-        appkey_hash_length: appkey_hash.length
-      });
-      
-      // Log parameters for debugging
       logger.debug('Shoonya login parameters:', {
         userId,
         vendorCode,
-        vendorCodeLength: vendorCode ? vendorCode.length : 0,
         hasPassword: !!password,
         hasTwoFA: !!twoFA,
         hasApiSecret: !!apiSecret,
@@ -82,7 +69,7 @@ class ShoonyaService {
         appKeyHashLength: appkey_hash.length
       });
       
-      // Prepare auth parameters exactly as in the NorenRestApi implementation
+      // Prepare auth parameters exactly as in the GitHub RestApi.js implementation
       const authParams = {
         "source": "API",
         "apkversion": "js:1.0.0",
@@ -98,21 +85,16 @@ class ShoonyaService {
         authParams.imei = imei;
       }
       
-      // Convert to JSON string
+      // Convert to JSON string and create payload exactly as in GitHub API
       const jData = JSON.stringify(authParams);
-      
-      // Create the payload exactly as in the NorenRestApi implementation
       const payload = `jData=${jData}`;
       
-      // Log the request details
-      logger.debug('Shoonya login request details:', {
+      logger.debug('Shoonya login request:', {
         url: this.baseURL + this.routes.authorize,
-        jDataLength: jData.length,
-        payloadLength: payload.length,
-        payload: payload
+        payloadLength: payload.length
       });
       
-      // Make the API call directly using axios, exactly as in the NorenRestApi implementation
+      // Make the API call using axios with proper headers
       const response = await axios.post(
         this.baseURL + this.routes.authorize, 
         payload,
@@ -123,19 +105,22 @@ class ShoonyaService {
         }
       );
 
-      // Log the response for debugging
       logger.debug('Shoonya login response:', response.data);
       
+      // Check response status as per GitHub API
       if (response.data.stat === 'Ok') {
         logger.info('Shoonya session token generated successfully');
         return {
           access_token: response.data.susertoken,
           session_token: response.data.susertoken,
           user_id: response.data.actid || userId,
-          account_id: response.data.actid
+          account_id: response.data.actid,
+          stat: response.data.stat
         };
       } else {
-        throw new Error(response.data.emsg || 'Failed to generate session token');
+        const errorMsg = response.data.emsg || 'Failed to generate session token';
+        logger.error('Shoonya login failed:', errorMsg);
+        throw new Error(errorMsg);
       }
     } catch (error) {
       logger.error('Failed to generate Shoonya session token:', error);
@@ -144,8 +129,7 @@ class ShoonyaService {
       if (error.response) {
         logger.error('Shoonya API error response:', {
           status: error.response.status,
-          data: error.response.data,
-          headers: error.response.headers
+          data: error.response.data
         });
       }
       
@@ -157,16 +141,16 @@ class ShoonyaService {
     }
   }
   
-  // Helper method to make API requests - exactly matching the NorenRestApi implementation
+  // Helper method to make API requests - Updated to match GitHub RestApi.js implementation
   async makeApiRequest(route, params, sessionToken = '') {
     try {
       const url = this.baseURL + this.routes[route];
       
-      // Format data as per Shoonya API requirements - EXACTLY as in NorenRestApi
+      // Format data exactly as per GitHub RestApi.js implementation
       const jData = JSON.stringify(params);
       let payload = 'jData=' + jData;
       
-      // Add session token if available
+      // Add session token if available - exactly as in GitHub API
       if (sessionToken) {
         payload = payload + `&jKey=${sessionToken}`;
       }
@@ -174,37 +158,35 @@ class ShoonyaService {
       logger.debug(`Making API request to ${route}`, { 
         url, 
         hasSessionToken: !!sessionToken,
-        jDataLength: jData.length,
-        payloadLength: payload.length
+        payloadLength: payload.length,
+        payload: payload.substring(0, 200) + (payload.length > 200 ? '...' : '') // Log first 200 chars of payload
       });
       
-      // For debugging only - log the request details
-      if (route === 'authorize') {
-        logger.debug('Request details:', {
-          url,
-          payload
-        });
-      }
-      
-      // Make the API call directly using axios, exactly as in the NorenRestApi implementation
+      // Make the API call using axios with proper headers
       const response = await axios.post(url, payload, {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         }
       });
       
-      // Log the response for debugging
       logger.debug(`API response from ${route}:`, response.data);
       
-      if (response.data.stat === 'Ok' || response.data.status === 'OK') {
+      // Check response status as per GitHub API implementation
+      if (response.data.stat === 'Ok') {
         return response.data;
-      } else {
+      } else if (Array.isArray(response.data)) {
+        // Some endpoints like holdings return an array directly
+        return response.data;
+      } else if (response.data.stat === 'Not_Ok') {
         const errorMsg = response.data.emsg || response.data.message || 'API call failed';
         logger.error(`API error in response: ${errorMsg}`, {
           route,
           errorData: response.data
         });
         throw new Error(errorMsg);
+      } else {
+        // For other response formats, return as-is
+        return response.data;
       }
     } catch (error) {
       logger.error(`API request to ${route} failed:`, error);
@@ -212,6 +194,7 @@ class ShoonyaService {
       if (error.response) {
         logger.error('API error response:', {
           status: error.response.status,
+          statusText: error.response.statusText,
           data: error.response.data,
           headers: error.response.headers
         });
@@ -226,10 +209,6 @@ class ShoonyaService {
     try {
       logger.info(`Initializing Shoonya instance for connection ${brokerConnection.id}`);
 
-      if (!brokerConnection.api_secret) {
-        throw new Error('API secret is missing from broker connection');
-      }
-
       if (!brokerConnection.access_token) {
         throw new Error('Access token is missing from broker connection');
       }
@@ -240,7 +219,14 @@ class ShoonyaService {
         throw new Error('Session token has expired. Please refresh your token.');
       }
 
-      const apiSecret = decryptData(brokerConnection.api_secret);
+      // For Shoonya, use api_key as the API secret (Shoonya doesn't have separate API secret)
+      let apiSecret;
+      if (brokerConnection.api_key) {
+        apiSecret = decryptData(brokerConnection.api_key);
+        logger.debug('Using api_key as API secret for Shoonya service');
+      } else {
+        throw new Error('API key is missing from Shoonya broker connection');
+      }
       const sessionToken = decryptData(brokerConnection.access_token);
 
       const shoonyaInstance = {
@@ -375,7 +361,7 @@ class ShoonyaService {
       const shoonyaOrderData = {
         exch: orderParams.exch || 'NSE',
         tsym: orderParams.tsym,
-        qty: parseInt(orderParams.qty),
+        qty: orderParams.qty.toString(),
         prc: orderParams.prctyp === 'LMT' ? parseFloat(orderParams.prc || 0).toString() : '0',
         prd: orderParams.prd || 'I', // I=Intraday, C=CNC, M=Margin
         trantype: orderParams.trantype, // B=Buy, S=Sell
@@ -496,55 +482,108 @@ class ShoonyaService {
     }
   }
 
-  // Get positions
+  // Get positions - Updated to match GitHub API implementation
   async getPositions(brokerConnectionId) {
     try {
       logger.info(`Getting Shoonya positions for connection ${brokerConnectionId}`);
       const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
       
-      // As per Shoonya API documentation, no additional parameters needed for position book
-      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'positions');
-      
-      logger.info('Shoonya positions retrieved successfully');
-      return response;
+      // As per GitHub RestApi.js, positions endpoint requires uid and actid
+      try {
+        const response = await this.makeApiCallWithInstance(shoonyaInstance, 'positions');
+        
+        logger.info('Shoonya positions retrieved successfully');
+        
+        // Return the response in a consistent format
+        return {
+          stat: 'Ok',
+          positions: Array.isArray(response) ? response : (response.data || [])
+        };
+      } catch (apiError) {
+        // Handle "no data" response as a valid empty result
+        if (apiError.message && apiError.message.includes('no data')) {
+          logger.info('No positions data available from Shoonya API');
+          return {
+            stat: 'Ok',
+            positions: []
+          };
+        }
+        throw apiError;
+      }
     } catch (error) {
       logger.error('Failed to get Shoonya positions:', error);
       throw new Error(`Failed to get positions: ${error.message}`);
     }
   }
 
-  // Get holdings
+  // Get holdings - Updated to match GitHub API implementation
   async getHoldings(brokerConnectionId, productType = '') {
     try {
       logger.info(`Getting Shoonya holdings for connection ${brokerConnectionId}`);
       const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
       
-      // As per Shoonya API, product_type is an optional parameter
-      const data = {};
-      if (productType) {
-        data.product = productType;
+      // As per GitHub RestApi.js, holdings endpoint requires uid, actid and prd
+      const data = {
+        prd: productType || 'C' // Default to 'C' (CNC/Delivery) if no product type specified
+      };
+      
+      try {
+        const response = await this.makeApiCallWithInstance(shoonyaInstance, 'holdings', data);
+        
+        logger.info('Shoonya holdings retrieved successfully');
+        
+        // Return the response in a consistent format
+        // Holdings API returns an array directly
+        return {
+          stat: 'Ok',
+          holdings: Array.isArray(response) ? response : []
+        };
+      } catch (apiError) {
+        // Handle "no data" response as a valid empty result
+        if (apiError.message && apiError.message.includes('no data')) {
+          logger.info('No holdings data available from Shoonya API');
+          return {
+            stat: 'Ok',
+            holdings: []
+          };
+        }
+        throw apiError;
       }
-      
-      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'holdings', data);
-      
-      logger.info('Shoonya holdings retrieved successfully');
-      return response;
     } catch (error) {
       logger.error('Failed to get Shoonya holdings:', error);
       throw new Error(`Failed to get holdings: ${error.message}`);
     }
   }
 
-  // Get orders
+  // Get orders - Updated to match GitHub API implementation
   async getOrders(brokerConnectionId) {
     try {
       logger.info(`Getting Shoonya orders for connection ${brokerConnectionId}`);
       const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
       
-      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'orderbook');
-      
-      logger.info('Shoonya orders retrieved successfully');
-      return response;
+      // As per GitHub RestApi.js, orderbook endpoint requires uid and actid
+      try {
+        const response = await this.makeApiCallWithInstance(shoonyaInstance, 'orderbook');
+        
+        logger.info('Shoonya orders retrieved successfully');
+        
+        // Return the response in a consistent format
+        // Orders API may return an array directly
+        return {
+          stat: 'Ok',
+          orders: Array.isArray(response) ? response : []
+        };
+      } catch (apiError) {
+        // Handle "no data" response as a valid empty result
+        if (apiError.message && apiError.message.includes('no data')) {
+          logger.info('No orders data available from Shoonya API');
+          return {
+            stat: 'Ok',
+            orders: []
+          };
+        }
+        throw apiError;
+      }
     } catch (error) {
       logger.error('Failed to get Shoonya orders:', error);
       throw new Error(`Failed to get orders: ${error.message}`);
@@ -674,12 +713,39 @@ class ShoonyaService {
     }
   }
   
-  // Get limits (margins)
+  // Get trade book - Added as per GitHub API implementation
+  async getTradeBook(brokerConnectionId) {
+    try {
+      logger.info(`Getting Shoonya trade book for connection ${brokerConnectionId}`);
+      const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
+      
+      // As per GitHub RestApi.js, tradebook endpoint requires uid and actid
+      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'tradebook');
+      
+      logger.info('Shoonya trade book retrieved successfully');
+      
+      // Return the response in a consistent format
+      if (response.stat === 'Ok') {
+        return {
+          stat: response.stat,
+          trades: Array.isArray(response) ? response : (response.data || [])
+        };
+      } else {
+        throw new Error(response.emsg || 'Failed to get trade book');
+      }
+    } catch (error) {
+      logger.error('Failed to get Shoonya trade book:', error);
+      throw new Error(`Failed to get trade book: ${error.message}`);
+    }
+  }
+
+  // Get limits (margins) - Updated to match GitHub API implementation
   async getLimits(brokerConnectionId, productType = '', segment = '', exchange = '') {
     try {
       logger.info(`Getting Shoonya limits for connection ${brokerConnectionId}`);
       const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
       
+      // As per GitHub RestApi.js implementation
       const data = {};
       if (productType) data.prd = productType;
       if (segment) data.seg = segment;
@@ -688,27 +754,132 @@ class ShoonyaService {
       const response = await this.makeApiCallWithInstance(shoonyaInstance, 'limits', data);
       
       logger.info('Shoonya limits retrieved successfully');
-      return response;
+      
+      // Return the response in a consistent format
+      if (response.stat === 'Ok') {
+        return {
+          stat: response.stat,
+          limits: response
+        };
+      } else {
+        throw new Error(response.emsg || 'Failed to get limits');
+      }
     } catch (error) {
       logger.error('Failed to get Shoonya limits:', error);
       throw new Error(`Failed to get limits: ${error.message}`);
     }
   }
 
-  // Logout from Shoonya
+  // Get watchlist names - Added as per GitHub API implementation
+  async getWatchlistNames(brokerConnectionId) {
+    try {
+      logger.info(`Getting Shoonya watchlist names for connection ${brokerConnectionId}`);
+      const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
+      
+      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'watchlist_names');
+      
+      logger.info('Shoonya watchlist names retrieved successfully');
+      
+      if (response.stat === 'Ok') {
+        return {
+          stat: response.stat,
+          watchlists: Array.isArray(response) ? response : (response.data || [])
+        };
+      } else {
+        throw new Error(response.emsg || 'Failed to get watchlist names');
+      }
+    } catch (error) {
+      logger.error('Failed to get Shoonya watchlist names:', error);
+      throw new Error(`Failed to get watchlist names: ${error.message}`);
+    }
+  }
+
+  // Get watchlist - Added as per GitHub API implementation
+  async getWatchlist(brokerConnectionId, watchlistName) {
+    try {
+      logger.info(`Getting Shoonya watchlist ${watchlistName} for connection ${brokerConnectionId}`);
+      const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
+      
+      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'watchlist', {
+        wlname: watchlistName
+      });
+      
+      logger.info('Shoonya watchlist retrieved successfully');
+      
+      if (response.stat === 'Ok') {
+        return {
+          stat: response.stat,
+          watchlist: Array.isArray(response) ? response : (response.data || [])
+        };
+      } else {
+        throw new Error(response.emsg || 'Failed to get watchlist');
+      }
+    } catch (error) {
+      logger.error('Failed to get Shoonya watchlist:', error);
+      throw new Error(`Failed to get watchlist: ${error.message}`);
+    }
+  }
+
+  // Add scrips to watchlist - Added as per GitHub API implementation
+  async addToWatchlist(brokerConnectionId, watchlistName, scrips) {
+    try {
+      logger.info(`Adding scrips to Shoonya watchlist ${watchlistName} for connection ${brokerConnectionId}`);
+      const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
+      
+      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'watchlist_add', {
+        wlname: watchlistName,
+        scrips: scrips // Should be a string of comma-separated scrips
+      });
+      
+      logger.info('Scrips added to Shoonya watchlist successfully');
+      return response;
+    } catch (error) {
+      logger.error('Failed to add scrips to Shoonya watchlist:', error);
+      throw new Error(`Failed to add to watchlist: ${error.message}`);
+    }
+  }
+
+  // Delete scrips from watchlist - Added as per GitHub API implementation
+  async deleteFromWatchlist(brokerConnectionId, watchlistName, scrips) {
+    try {
+      logger.info(`Deleting scrips from Shoonya watchlist ${watchlistName} for connection ${brokerConnectionId}`);
+      const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
+      
+      const response = await this.makeApiCallWithInstance(shoonyaInstance, 'watchlist_delete', {
+        wlname: watchlistName,
+        scrips: scrips // Should be a string of comma-separated scrips
+      });
+      
+      logger.info('Scrips deleted from Shoonya watchlist successfully');
+      return response;
+    } catch (error) {
+      logger.error('Failed to delete scrips from Shoonya watchlist:', error);
+      throw new Error(`Failed to delete from watchlist: ${error.message}`);
+    }
+  }
+
+  // Logout from Shoonya - Updated to match GitHub API implementation
   async logout(brokerConnectionId) {
     try {
       logger.info(`Logging out from Shoonya for connection ${brokerConnectionId}`);
       const shoonyaInstance = await this.getShoonyaInstance(brokerConnectionId);
       
-      // Call the logout endpoint
+      // Call the logout endpoint as per GitHub API
       const response = await this.makeApiCallWithInstance(shoonyaInstance, 'logout');
       
       // Clear the cached instance
       this.clearCachedInstance(brokerConnectionId);
       
       logger.info('Shoonya logout successful');
-      return response;
+      
+      if (response.stat === 'Ok') {
+        return {
+          stat: response.stat,
+          message: 'Logout successful'
+        };
+      } else {
+        throw new Error(response.emsg || 'Failed to logout');
+      }
     } catch (error) {
       logger.error('Failed to logout from Shoonya:', error);
       // Still clear the cached instance even if the API call fails
