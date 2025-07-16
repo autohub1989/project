@@ -359,6 +359,51 @@ router.get('/positions/:connectionId', authenticateToken, async (req, res) => {
               value: (pos.quantity || 0) * (pos.last_price || 0)
             }));
         }
+      } else if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const positionsData = await shoonyaService.getPositions(connectionId);
+        
+        // Format Shoonya positions data
+        if (positionsData && positionsData.positions && Array.isArray(positionsData.positions)) {
+          positions = positionsData.positions
+            .filter(pos => Math.abs(pos.netqty || 0) > 0) // Only non-zero positions
+            .map(pos => ({
+              tradingsymbol: pos.tsym,
+              exchange: pos.exch,
+              instrument_token: pos.token,
+              product: pos.prd,
+              quantity: parseInt(pos.netqty || 0),
+              average_price: parseFloat(pos.netavgprc || 0),
+              last_price: parseFloat(pos.lp || 0),
+              pnl: parseFloat(pos.rpnl || 0) + parseFloat(pos.urmtom || 0),
+              unrealised: parseFloat(pos.urmtom || 0),
+              realised: parseFloat(pos.rpnl || 0),
+              value: parseFloat(pos.netqty || 0) * parseFloat(pos.lp || 0),
+              buy_quantity: parseInt(pos.daybuyqty || 0),
+              sell_quantity: parseInt(pos.daysellqty || 0),
+              multiplier: parseInt(pos.mult || 1)
+            }));
+        }
+      } else if (connection.broker_name.toLowerCase() === 'angel') {
+        const positionsData = await angelService.getPositions(connectionId);
+        
+        // Format Angel positions data
+        if (positionsData && positionsData.data && Array.isArray(positionsData.data)) {
+          positions = positionsData.data
+            .filter(pos => Math.abs(pos.netqty || 0) > 0) // Only non-zero positions
+            .map(pos => ({
+              tradingsymbol: pos.tradingsymbol,
+              exchange: pos.exchange,
+              instrument_token: pos.symboltoken,
+              product: pos.producttype,
+              quantity: parseInt(pos.netqty || 0),
+              average_price: parseFloat(pos.avgnetprice || 0),
+              last_price: parseFloat(pos.ltp || 0),
+              pnl: parseFloat(pos.pnl || 0),
+              unrealised: parseFloat(pos.unrealised || 0),
+              realised: parseFloat(pos.realised || 0),
+              value: parseFloat(pos.netvalue || 0)
+            }));
+        }
       } else {
         // For other brokers, implement their specific position fetching
         logger.warn(`Real-time positions not implemented for ${connection.broker_name}`);
@@ -476,6 +521,65 @@ router.get('/holdings/:connectionId', authenticateToken, async (req, res) => {
               day_change_percentage: holding.day_change_percentage || 0,
               used_quantity: holding.used_quantity || 0,
               collateral_quantity: holding.collateral_quantity || 0
+            }));
+        }
+      } else if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const holdingsData = await shoonyaService.getHoldings(connectionId);
+        
+        // Format Shoonya holdings data
+        if (holdingsData && holdingsData.holdings && Array.isArray(holdingsData.holdings)) {
+          holdings = holdingsData.holdings
+            .filter(holding => 
+              parseInt(holding.holdqty || 0) > 0 || 
+              parseInt(holding.npoadqty || 0) > 0 || 
+              parseInt(holding.benqty || 0) > 0
+            ) // Holdings with any positive quantity
+            .map(holding => {
+              // Get the first exchange info from exch_tsym array if available
+              const exchInfo = holding.exch_tsym && holding.exch_tsym[0] ? holding.exch_tsym[0] : {};
+              
+              return {
+                tradingsymbol: exchInfo.tsym || holding.tsym,
+                exchange: exchInfo.exch || holding.exch,
+                instrument_token: exchInfo.token || holding.token,
+                isin: exchInfo.isin || holding.isin,
+              product: holding.prd,
+              price: parseFloat(holding.upldprc || 0),
+              quantity: parseInt(holding.npoadqty || holding.holdqty || 0),
+              used_quantity: parseInt(holding.usedqty || 0),
+              collateral_quantity: parseInt(holding.brkcolqty || 0),
+              average_price: parseFloat(holding.upldprc || 0),
+              last_price: parseFloat(holding.lp || 0),
+              close_price: parseFloat(holding.lp || 0),
+              pnl: (parseInt(holding.npoadqty || holding.holdqty || 0) * (parseFloat(holding.lp || 0) - parseFloat(holding.upldprc || 0))),
+                day_change: parseFloat(holding.lp || 0) - parseFloat(holding.upldprc || 0),
+                day_change_percentage: parseFloat(holding.upldprc || 0) > 0 ? 
+                  ((parseFloat(holding.lp || 0) - parseFloat(holding.upldprc || 0)) / parseFloat(holding.upldprc || 0)) * 100 : 0
+              };
+            });
+        }
+      } else if (connection.broker_name.toLowerCase() === 'angel') {
+        const holdingsData = await angelService.getHoldings(connectionId);
+        
+        // Format Angel holdings data
+        if (holdingsData && holdingsData.data && Array.isArray(holdingsData.data)) {
+          holdings = holdingsData.data
+            .filter(holding => parseInt(holding.quantity || 0) > 0) // Only positive holdings
+            .map(holding => ({
+              tradingsymbol: holding.tradingsymbol,
+              exchange: holding.exchange,
+              instrument_token: holding.symboltoken,
+              isin: holding.isin,
+              product: holding.producttype,
+              price: parseFloat(holding.price || 0),
+              quantity: parseInt(holding.quantity || 0),
+              average_price: parseFloat(holding.averageprice || 0),
+              last_price: parseFloat(holding.ltp || 0),
+              close_price: parseFloat(holding.close || 0),
+              pnl: parseFloat(holding.pnl || 0),
+              day_change: parseFloat(holding.ltp || 0) - parseFloat(holding.close || 0),
+              day_change_percentage: parseFloat(holding.close || 0) > 0 ? 
+                ((parseFloat(holding.ltp || 0) - parseFloat(holding.close || 0)) / parseFloat(holding.close || 0)) * 100 : 0
             }));
         }
       } else {
@@ -1857,17 +1961,14 @@ router.post('/auth/shoonya/login', authenticateToken, async (req, res) => {
       // Decrypt credentials if needed
       let apiSecret;
       
-      // Check if we have encrypted_api_secret or use api_key as fallback
-      if (connection.encrypted_api_secret) {
-        apiSecret = decryptData(connection.encrypted_api_secret);
-        logger.debug('Using encrypted_api_secret for Shoonya authentication');
-      } else if (connection.api_key) {
+      // For Shoonya, use api_key as the API secret (Shoonya doesn't have separate API secret)
+      if (connection.api_key) {
         apiSecret = decryptData(connection.api_key);
-        logger.debug('Using api_key as api_secret for Shoonya authentication');
+        logger.debug('Using api_key as API secret for Shoonya authentication');
       } else {
-        // For Shoonya, API secret is optional
-        apiSecret = '';
-        logger.debug('No API secret found for Shoonya connection, continuing without it');
+        return res.status(400).json({ 
+          error: 'API key is missing from Shoonya broker connection. Please update your connection details.' 
+        });
       }
       
       // Log connection details for debugging
@@ -2295,6 +2396,665 @@ router.get('/debug/upstox-auth', async (req, res) => {
   } catch (error) {
     logger.error('Debug endpoint error:', error);
     return res.status(500).json({ error: error.message });
+  }
+});
+
+// Get orders from broker
+router.get('/orders/:connectionId', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    
+    logger.info(`Fetching orders for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let orders = [];
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'zerodha') {
+        const ordersData = await kiteService.getOrders(connectionId);
+        
+        if (ordersData && Array.isArray(ordersData)) {
+          orders = ordersData.map(order => ({
+            order_id: order.order_id,
+            exchange_order_id: order.exchange_order_id,
+            parent_order_id: order.parent_order_id,
+            status: order.status,
+            status_message: order.status_message,
+            order_timestamp: order.order_timestamp,
+            exchange_timestamp: order.exchange_timestamp,
+            variety: order.variety,
+            exchange: order.exchange,
+            tradingsymbol: order.tradingsymbol,
+            instrument_token: order.instrument_token,
+            order_type: order.order_type,
+            transaction_type: order.transaction_type,
+            validity: order.validity,
+            product: order.product,
+            quantity: order.quantity,
+            disclosed_quantity: order.disclosed_quantity,
+            price: order.price,
+            trigger_price: order.trigger_price,
+            average_price: order.average_price,
+            filled_quantity: order.filled_quantity,
+            pending_quantity: order.pending_quantity,
+            cancelled_quantity: order.cancelled_quantity
+          }));
+        }
+      } else if (connection.broker_name.toLowerCase() === 'upstox') {
+        const ordersData = await upstoxService.getOrders(connectionId);
+        
+        if (ordersData && Array.isArray(ordersData)) {
+          orders = ordersData.map(order => ({
+            order_id: order.order_id,
+            exchange_order_id: order.exchange_order_id,
+            status: order.status,
+            order_timestamp: order.order_timestamp,
+            exchange: order.exchange,
+            tradingsymbol: order.instrument_token,
+            instrument_token: order.instrument_token,
+            order_type: order.order_type,
+            transaction_type: order.transaction_type,
+            product: order.product,
+            quantity: order.quantity,
+            price: order.price,
+            trigger_price: order.trigger_price,
+            average_price: order.average_price,
+            filled_quantity: order.filled_quantity,
+            pending_quantity: order.pending_quantity
+          }));
+        }
+      } else if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const ordersData = await shoonyaService.getOrders(connectionId);
+        
+        if (ordersData && ordersData.orders && Array.isArray(ordersData.orders)) {
+          orders = ordersData.orders.map(order => ({
+            order_id: order.norenordno,
+            exchange_order_id: order.exordno,
+            status: order.status,
+            status_message: order.rejreason || '',
+            order_timestamp: order.norentm,
+            exchange_timestamp: order.exch_tm,
+            exchange: order.exch,
+            tradingsymbol: order.tsym,
+            instrument_token: order.token,
+            order_type: order.prctyp,
+            transaction_type: order.trantype,
+            validity: order.ret,
+            product: order.prd,
+            quantity: parseInt(order.qty || 0),
+            disclosed_quantity: parseInt(order.dscqty || 0),
+            price: parseFloat(order.prc || 0),
+            trigger_price: parseFloat(order.trgprc || 0),
+            average_price: parseFloat(order.avgprc || 0),
+            filled_quantity: parseInt(order.fillshares || 0),
+            pending_quantity: parseInt(order.qty || 0) - parseInt(order.fillshares || 0),
+            cancelled_quantity: 0
+          }));
+        }
+      } else if (connection.broker_name.toLowerCase() === 'angel') {
+        const ordersData = await angelService.getOrders(connectionId);
+        
+        if (ordersData && ordersData.data && Array.isArray(ordersData.data)) {
+          orders = ordersData.data.map(order => ({
+            order_id: order.orderid,
+            exchange_order_id: order.exchangeorderid,
+            status: order.status,
+            order_timestamp: order.ordertime,
+            exchange: order.exchange,
+            tradingsymbol: order.tradingsymbol,
+            instrument_token: order.symboltoken,
+            order_type: order.ordertype,
+            transaction_type: order.transactiontype,
+            product: order.producttype,
+            quantity: parseInt(order.quantity || 0),
+            price: parseFloat(order.price || 0),
+            trigger_price: parseFloat(order.triggerprice || 0),
+            average_price: parseFloat(order.averageprice || 0),
+            filled_quantity: parseInt(order.filledshares || 0),
+            pending_quantity: parseInt(order.unfilledshares || 0)
+          }));
+        }
+      } else {
+        logger.warn(`Orders not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Orders not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Retrieved ${orders.length} orders for connection ${connectionId}`);
+      
+      res.json({
+        orders,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to fetch orders from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch orders from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Get orders error:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// Get trade book from broker (Shoonya specific)
+router.get('/tradebook/:connectionId', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    
+    logger.info(`Fetching trade book for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let trades = [];
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const tradesData = await shoonyaService.getTradeBook(connectionId);
+        
+        if (tradesData && tradesData.trades && Array.isArray(tradesData.trades)) {
+          trades = tradesData.trades.map(trade => ({
+            trade_id: trade.norenordno,
+            order_id: trade.norenordno,
+            exchange_order_id: trade.exordno,
+            exchange: trade.exch,
+            tradingsymbol: trade.tsym,
+            instrument_token: trade.token,
+            product: trade.prd,
+            quantity: parseInt(trade.qty || 0),
+            price: parseFloat(trade.prc || 0),
+            transaction_type: trade.trantype,
+            trade_timestamp: trade.norentm,
+            exchange_timestamp: trade.exch_tm
+          }));
+        }
+      } else {
+        logger.warn(`Trade book not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Trade book not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Retrieved ${trades.length} trades for connection ${connectionId}`);
+      
+      res.json({
+        trades,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to fetch trade book from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch trade book from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Get trade book error:', error);
+    res.status(500).json({ error: 'Failed to fetch trade book' });
+  }
+});
+
+// Get limits/margins from broker
+router.get('/limits/:connectionId', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    const { product_type, segment, exchange } = req.query;
+    
+    logger.info(`Fetching limits for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let limits = {};
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const limitsData = await shoonyaService.getLimits(connectionId, product_type, segment, exchange);
+        
+        if (limitsData && limitsData.limits) {
+          limits = {
+            cash: parseFloat(limitsData.limits.cash || 0),
+            payin: parseFloat(limitsData.limits.payin || 0),
+            payout: parseFloat(limitsData.limits.payout || 0),
+            brkcollamt: parseFloat(limitsData.limits.brkcollamt || 0),
+            unclearedcash: parseFloat(limitsData.limits.unclearedcash || 0),
+            daycash: parseFloat(limitsData.limits.daycash || 0),
+            marginused: parseFloat(limitsData.limits.marginused || 0),
+            mtomcurper: parseFloat(limitsData.limits.mtomcurper || 0)
+          };
+        }
+      } else {
+        logger.warn(`Limits not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Limits not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Retrieved limits for connection ${connectionId}`);
+      
+      res.json({
+        limits,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to fetch limits from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch limits from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Get limits error:', error);
+    res.status(500).json({ error: 'Failed to fetch limits' });
+  }
+});
+
+// Get watchlist names (Shoonya specific)
+router.get('/watchlists/:connectionId', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    
+    logger.info(`Fetching watchlist names for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let watchlists = [];
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const watchlistsData = await shoonyaService.getWatchlistNames(connectionId);
+        
+        if (watchlistsData && watchlistsData.watchlists) {
+          watchlists = watchlistsData.watchlists;
+        }
+      } else {
+        logger.warn(`Watchlists not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Watchlists not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Retrieved ${watchlists.length} watchlists for connection ${connectionId}`);
+      
+      res.json({
+        watchlists,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to fetch watchlists from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch watchlists from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Get watchlists error:', error);
+    res.status(500).json({ error: 'Failed to fetch watchlists' });
+  }
+});
+
+// Get specific watchlist (Shoonya specific)
+router.get('/watchlist/:connectionId/:watchlistName', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId, watchlistName } = req.params;
+    
+    logger.info(`Fetching watchlist ${watchlistName} for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let watchlist = [];
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const watchlistData = await shoonyaService.getWatchlist(connectionId, watchlistName);
+        
+        if (watchlistData && watchlistData.watchlist) {
+          watchlist = watchlistData.watchlist;
+        }
+      } else {
+        logger.warn(`Watchlist not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Watchlist not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Retrieved watchlist ${watchlistName} with ${watchlist.length} items for connection ${connectionId}`);
+      
+      res.json({
+        watchlist_name: watchlistName,
+        watchlist,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to fetch watchlist from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch watchlist from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Get watchlist error:', error);
+    res.status(500).json({ error: 'Failed to fetch watchlist' });
+  }
+});
+
+// Search symbols (Shoonya specific)
+router.get('/search/:connectionId', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    const { symbol, exchange = 'NSE' } = req.query;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol parameter is required' });
+    }
+    
+    logger.info(`Searching symbol ${symbol} on ${exchange} for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let searchResults = [];
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const searchData = await shoonyaService.searchSymbol(connectionId, symbol, exchange);
+        
+        if (searchData && Array.isArray(searchData)) {
+          searchResults = searchData.map(result => ({
+            exchange: result.exch,
+            token: result.token,
+            trading_symbol: result.tsym,
+            symbol: result.tsym,
+            company_name: result.cname,
+            instrument_type: result.instname,
+            lot_size: parseInt(result.ls || 1),
+            tick_size: parseFloat(result.ti || 0.05)
+          }));
+        }
+      } else {
+        logger.warn(`Symbol search not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Symbol search not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Found ${searchResults.length} results for symbol ${symbol} on ${exchange}`);
+      
+      res.json({
+        search_query: symbol,
+        exchange,
+        results: searchResults,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to search symbols from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to search symbols from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Search symbols error:', error);
+    res.status(500).json({ error: 'Failed to search symbols' });
+  }
+});
+
+// Get market data/quotes (Shoonya specific)
+router.get('/quotes/:connectionId', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    const { exchange, token } = req.query;
+    
+    if (!exchange || !token) {
+      return res.status(400).json({ error: 'Exchange and token parameters are required' });
+    }
+    
+    logger.info(`Fetching quotes for ${exchange}:${token} for connection ${connectionId}`);
+
+    // Verify connection belongs to user and is active
+    const connection = await db.getAsync(
+      'SELECT * FROM broker_connections WHERE id = ? AND user_id = ? AND is_active = 1',
+      [connectionId, req.user.id]
+    );
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Broker connection not found or inactive' });
+    }
+
+    // Validate token and handle expiration
+    const tokenValidation = await validateTokenAndHandleExpiration(connection, res, logger);
+    if (!tokenValidation.valid) {
+      return tokenValidation.response;
+    }
+
+    let quotes = {};
+    
+    try {
+      if (connection.broker_name.toLowerCase() === 'shoonya') {
+        const quotesData = await shoonyaService.getMarketData(connectionId, exchange, token);
+        
+        if (quotesData && quotesData.stat === 'Ok') {
+          quotes = {
+            exchange: quotesData.exch,
+            token: quotesData.token,
+            trading_symbol: quotesData.tsym,
+            last_price: parseFloat(quotesData.lp || 0),
+            change: parseFloat(quotesData.c || 0),
+            change_percentage: parseFloat(quotesData.prcftr_d || 0),
+            volume: parseInt(quotesData.v || 0),
+            average_price: parseFloat(quotesData.ap || 0),
+            lower_circuit: parseFloat(quotesData.lc || 0),
+            upper_circuit: parseFloat(quotesData.uc || 0),
+            open: parseFloat(quotesData.o || 0),
+            high: parseFloat(quotesData.h || 0),
+            low: parseFloat(quotesData.l || 0),
+            close: parseFloat(quotesData.c || 0),
+            bid_price: parseFloat(quotesData.bp1 || 0),
+            bid_quantity: parseInt(quotesData.bq1 || 0),
+            ask_price: parseFloat(quotesData.sp1 || 0),
+            ask_quantity: parseInt(quotesData.sq1 || 0)
+          };
+        }
+      } else {
+        logger.warn(`Market data not implemented for ${connection.broker_name}`);
+        return res.status(400).json({ 
+          error: `Market data not supported for ${connection.broker_name}` 
+        });
+      }
+
+      logger.info(`Retrieved market data for ${exchange}:${token}`);
+      
+      res.json({
+        quotes,
+        broker_name: connection.broker_name,
+        last_updated: new Date().toISOString(),
+        connection_id: connectionId
+      });
+
+    } catch (brokerError) {
+      logger.error('Failed to fetch market data from broker:', brokerError);
+      
+      if (brokerError.message && (brokerError.message.includes('api_key') || brokerError.message.includes('access_token'))) {
+        return res.status(401).json({ 
+          error: 'Invalid or expired credentials. Please reconnect your account.',
+          tokenExpired: true,
+          details: brokerError.message
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch market data from broker',
+        details: brokerError.message
+      });
+    }
+
+  } catch (error) {
+    logger.error('Get market data error:', error);
+    res.status(500).json({ error: 'Failed to fetch market data' });
   }
 });
 
