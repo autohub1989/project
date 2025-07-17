@@ -337,11 +337,66 @@ export const initDatabase = async () => {
       )
     `);
 
+    // Instruments/Symbols master table
+    logger.debug('Creating instruments table');
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS instruments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        exchange TEXT NOT NULL,
+        segment TEXT,
+        instrument_type TEXT DEFAULT 'EQ',
+        lot_size INTEGER DEFAULT 1,
+        tick_size DECIMAL(10,4) DEFAULT 0.05,
+        isin TEXT,
+        expiry_date DATE,
+        strike_price DECIMAL(10,2),
+        option_type TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(symbol, exchange, segment, expiry_date, strike_price, option_type)
+      )
+    `);
+
+    // Broker-specific instrument mappings
+    logger.debug('Creating broker_instrument_mappings table');
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS broker_instrument_mappings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instrument_id INTEGER NOT NULL,
+        broker_name TEXT NOT NULL,
+        broker_symbol TEXT NOT NULL,
+        broker_token TEXT,
+        broker_exchange TEXT,
+        is_active BOOLEAN DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (instrument_id) REFERENCES instruments (id),
+        UNIQUE(broker_name, broker_symbol, broker_exchange)
+      )
+    `);
+
+    // Symbol sync status tracking
+    logger.debug('Creating symbol_sync_status table');
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS symbol_sync_status (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        broker_name TEXT NOT NULL UNIQUE,
+        last_sync_at DATETIME,
+        sync_status TEXT DEFAULT 'pending',
+        total_symbols INTEGER DEFAULT 0,
+        error_message TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     logger.info('Database initialization completed successfully', {
       tablesCreated: [
         'users', 'pending_registrations', 'otps', 'password_reset_tokens',
         'subscriptions', 'broker_connections', 'orders', 'positions', 'holdings', 
-        'webhook_logs', 'market_data'
+        'webhook_logs', 'market_data', 'instruments', 'broker_instrument_mappings', 'symbol_sync_status'
       ]
     });
   } catch (error) {

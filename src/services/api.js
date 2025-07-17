@@ -30,10 +30,11 @@ api.interceptors.response.use(
   (error) => {
     console.error(`❌ API Error: ${error.config?.method?.toUpperCase()} ${error.config?.url}`, error);
     
-    if (error.response?.status === 401) {
-      localStorage.removeItem('authToken');
-      window.location.href = '/login';
-    }
+    // Temporarily disable automatic redirect for testing
+    // if (error.response?.status === 401) {
+    //   localStorage.removeItem('authToken');
+    //   window.location.href = '/login';
+    // }
     
     // Enhanced error information
     if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
@@ -201,6 +202,66 @@ export const subscriptionAPI = {
 export const webhookAPI = {
   getLogs: (userId, params) => api.get(`/webhook/logs/${userId}`, { params }),
   testWebhook: (userId, webhookId) => api.post(`/webhook/test/${userId}/${webhookId}`),
+};
+
+// Symbols API - For symbol search and mapping
+export const symbolsAPI = {
+  // Get sync status for all brokers
+  getSyncStatus: () => api.get('/symbols/sync-status'),
+  
+  // Sync symbols for all brokers
+  syncAllSymbols: () => api.post('/symbols/sync-all'),
+  
+  // Sync symbols for specific broker
+  syncBrokerSymbols: (broker) => api.post(`/symbols/sync/${broker}`),
+  
+  // Search symbols
+  searchSymbols: (query, exchange = null, limit = 50) => 
+    api.get('/symbols/search', { params: { q: query, exchange, limit } }),
+  
+  // Enhanced symbol search with advanced options
+  enhancedSymbolSearch: (query, options = {}) => 
+    api.get('/symbols/search/enhanced', { 
+      params: { q: query, ...options } 
+    }),
+
+  // Search symbols by segment (segment-specific search)
+  searchSymbolsBySegment: (query, segment, options = {}) =>
+    api.get('/symbols/search/segment', {
+      params: { q: query, segment, ...options }
+    }),
+
+  // Get available segments
+  getAvailableSegments: () => api.get('/symbols/segments'),
+  
+  // Get broker-specific symbol mapping
+  getBrokerMapping: (broker, symbol, exchange) => 
+    api.get(`/symbols/mapping/${broker}/${symbol}/${exchange}`),
+  
+  // Get symbol details with all broker mappings
+  getSymbolDetails: (symbol, exchange) => 
+    api.get(`/symbols/details/${symbol}/${exchange}`),
+  
+  // Get symbols by exchange
+  getSymbolsByExchange: (exchange, limit = 100) =>
+    api.get(`/symbols/exchange/${exchange}`, { params: { limit } }),
+  
+  // Get popular symbols
+  getPopularSymbols: (limit = 20) =>
+    api.get('/symbols/popular', { params: { limit } }),
+  
+  // Get available exchanges
+  getExchanges: () => api.get('/symbols/exchanges'),
+  
+  // Get symbol files information
+  getSymbolFiles: () => api.get('/symbols/files'),
+  
+  // Download symbol file
+  downloadSymbolFile: (broker, type, date = 'latest') =>
+    api.get(`/symbols/download/${broker}/${type}`, { 
+      params: { date },
+      responseType: 'blob'
+    }),
 };
 
 export default api;

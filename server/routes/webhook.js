@@ -57,6 +57,7 @@ function formatOrderPayload(payload, brokerName, debugLogs) {
     const instrumentToken = payload.instrument_token || `${symbolStr}`;
     formatted = {
       instrument_token: instrumentToken,
+      exchange: payload.exchange || 'NSE_EQ', // Default to NSE_EQ for Upstox
       quantity: parseInt(payload.quantity),
       product: payload.product === 'MIS' ? 'I' : (payload.product === 'CNC' ? 'D' : 'I'), // I=Intraday, D=Delivery
       validity: payload.validity || 'DAY',

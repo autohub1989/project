@@ -1,16 +1,17 @@
 import React from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { 
-  LayoutDashboard, 
-  FileText, 
-  BarChart3, 
-  Link as LinkIcon, 
+import {
+  LayoutDashboard,
+  FileText,
+  BarChart3,
+  Link as LinkIcon,
   Settings,
   Menu,
   X,
   Activity,
-  Code
+  Code,
+  Database
 } from 'lucide-react';
 
 const DashboardLayout: React.FC = () => {
@@ -23,6 +24,7 @@ const DashboardLayout: React.FC = () => {
     { name: 'Positions', href: '/dashboard/positions', icon: Activity },
     { name: 'P&L Analytics', href: '/dashboard/pnl', icon: BarChart3 },
     { name: 'Broker Connection', href: '/dashboard/brokers', icon: LinkIcon },
+    { name: 'Symbols Management', href: '/dashboard/symbols', icon: Database },
     { name: 'Webhook Syntax', href: '/dashboard/webhook-syntax', icon: Code },
     { name: 'Settings', href: '/dashboard/settings', icon: Settings },
   ];
