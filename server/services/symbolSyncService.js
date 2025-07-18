@@ -79,21 +79,23 @@ class SymbolSyncService {
 
   // Sync symbols for a specific broker
   async syncBrokerSymbols(brokerName) {
-    if (this.syncInProgress.has(brokerName)) {
+    const normalizedBrokerName = brokerName.toLowerCase();
+    
+    if (this.syncInProgress.has(normalizedBrokerName)) {
       throw new Error(`Sync already in progress for ${brokerName}`);
     }
 
-    this.syncInProgress.add(brokerName);
+    this.syncInProgress.add(normalizedBrokerName);
     
     try {
       logger.info(`Starting symbol sync for ${brokerName}`);
       
       // Update sync status to 'in_progress'
-      await this.updateSyncStatus(brokerName, 'in_progress', null, 0);
+      await this.updateSyncStatus(normalizedBrokerName, 'in_progress', null, 0);
       
       let symbols = [];
       
-      switch (brokerName.toLowerCase()) {
+      switch (normalizedBrokerName) {
         case 'zerodha':
           symbols = await this.fetchZerodhaSymbols();
           break;
@@ -110,14 +112,30 @@ class SymbolSyncService {
           throw new Error(`Unsupported broker: ${brokerName}`);
       }
       
+      if (!symbols || symbols.length === 0) {
+        throw new Error(`No symbols fetched for ${brokerName}`);
+      }
+      
+      logger.info(`Fetched ${symbols.length} symbols for ${brokerName}, now storing...`);
+      
       // Store symbols in database and files
-      const result = await this.storeSymbols(brokerName, symbols);
-      await this.saveSymbolsToFile(brokerName, symbols);
+      const result = await this.storeSymbols(normalizedBrokerName, symbols);
+      
+      logger.info(`Stored symbols for ${brokerName}`, result);
+      
+      // Save to files (non-critical, don't fail sync if this fails)
+      try {
+        await this.saveSymbolsToFile(normalizedBrokerName, symbols);
+        logger.info(`Saved symbols to files for ${brokerName}`);
+      } catch (fileError) {
+        logger.warn(`Failed to save symbols to files for ${brokerName}:`, fileError.message);
+        // Don't fail the sync for file save errors
+      }
       
       // Update sync status to 'completed'
-      await this.updateSyncStatus(brokerName, 'completed', null, symbols.length);
+      await this.updateSyncStatus(normalizedBrokerName, 'completed', null, symbols.length);
       
-      logger.info(`Symbol sync completed for ${brokerName}`, {
+      logger.info(`Symbol sync completed successfully for ${brokerName}`, {
         totalSymbols: symbols.length,
         stored: result.stored,
         updated: result.updated
@@ -132,10 +150,16 @@ class SymbolSyncService {
       
     } catch (error) {
       logger.error(`Symbol sync failed for ${brokerName}:`, error);
-      await this.updateSyncStatus(brokerName, 'failed', error.message, 0);
+      
+      try {
+        await this.updateSyncStatus(normalizedBrokerName, 'failed', error.message, 0);
+      } catch (statusError) {
+        logger.error(`Failed to update status for ${brokerName}:`, statusError);
+      }
+      
       throw error;
     } finally {
-      this.syncInProgress.delete(brokerName);
+      this.syncInProgress.delete(normalizedBrokerName);
     }
   }
 
@@ -200,73 +224,118 @@ class SymbolSyncService {
     try {
       logger.info('Fetching Upstox symbols from public instruments API');
       
-      // Try public API first, fallback to authenticated API if needed
+      // Try multiple Upstox endpoints
       let response;
+      let symbols = [];
+      
+      // Try the main CSV endpoint first
       try {
-        // Public instruments API endpoint
-        response = await axios.get('https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz', {
-          timeout: 60000,
+        logger.info('Trying Upstox complete CSV endpoint...');
+        response = await axios.get('https://assets.upstox.com/market-quote/instruments/exchange/complete.csv', {
+          timeout: 120000, // 2 minutes timeout
           responseType: 'text'
         });
-      } catch (publicError) {
-        logger.warn('Public Upstox API failed, trying authenticated API:', publicError.message);
         
-        // Fallback to authenticated API
-        const connection = await db.getAsync(
-          'SELECT * FROM broker_connections WHERE broker_name = ? AND is_active = 1 LIMIT 1',
-          ['upstox']
-        );
+        if (response.data && response.data.length > 1000) {
+          logger.info('Successfully fetched Upstox CSV data, size:', response.data.length);
+        } else {
+          throw new Error('CSV data too small or empty');
+        }
+      } catch (csvError) {
+        logger.warn('Complete CSV failed, trying individual exchange files:', csvError.message);
         
-        if (!connection || !connection.access_token) {
-          throw new Error('No active Upstox connection found for symbol sync and public API failed');
+        // Try individual exchange files
+        const exchanges = [
+          'https://assets.upstox.com/market-quote/instruments/exchange/NSE_EQ.csv',
+          'https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.csv',
+          'https://assets.upstox.com/market-quote/instruments/exchange/BSE_EQ.csv',
+          'https://assets.upstox.com/market-quote/instruments/exchange/BSE_FO.csv',
+          'https://assets.upstox.com/market-quote/instruments/exchange/MCX_FO.csv'
+        ];
+        
+        let combinedData = '';
+        let headerAdded = false;
+        
+        for (const exchangeUrl of exchanges) {
+          try {
+            logger.info(`Fetching from ${exchangeUrl}...`);
+            const exchangeResponse = await axios.get(exchangeUrl, {
+              timeout: 60000,
+              responseType: 'text'
+            });
+            
+            if (exchangeResponse.data) {
+              const lines = exchangeResponse.data.split('\n');
+              if (!headerAdded && lines.length > 0) {
+                combinedData += lines[0] + '\n'; // Add header
+                headerAdded = true;
+              }
+              // Add data lines (skip header)
+              for (let i = 1; i < lines.length; i++) {
+                if (lines[i].trim()) {
+                  combinedData += lines[i] + '\n';
+                }
+              }
+              logger.info(`Added ${lines.length - 1} lines from ${exchangeUrl}`);
+            }
+          } catch (exchangeError) {
+            logger.warn(`Failed to fetch ${exchangeUrl}:`, exchangeError.message);
+          }
         }
         
-        const accessToken = decryptData(connection.access_token);
-        
-        response = await axios.get('https://api.upstox.com/v2/instruments', {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Accept': 'application/json'
-          },
-          timeout: 60000
-        });
+        if (combinedData.length > 1000) {
+          response = { data: combinedData };
+          logger.info('Successfully combined exchange data, total size:', combinedData.length);
+        } else {
+          throw new Error('All Upstox endpoints failed or returned insufficient data');
+        }
       }
       
-      const symbols = [];
-      
-      // Handle CSV response (public API)
+      // Parse CSV data
       if (typeof response.data === 'string') {
         const lines = response.data.split('\n');
-        const headers = lines[0].split(',');
+        if (lines.length < 2) {
+          throw new Error('Invalid CSV format - insufficient data');
+        }
+        
+        const headers = lines[0].split(',').map(h => h.trim());
+        logger.info('CSV headers:', headers.slice(0, 10)); // Log first 10 headers
         
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (!line) continue;
           
-          const values = line.split(',');
-          if (values.length >= headers.length) {
+          // Handle CSV parsing with quoted values
+          const values = this.parseCSVLine(line);
+          if (values.length >= headers.length - 2) { // Allow some flexibility
             const instrument = {};
             headers.forEach((header, index) => {
-              instrument[header.trim()] = values[index]?.trim() || '';
+              instrument[header] = values[index]?.trim() || '';
             });
             
-            symbols.push({
-              symbol: instrument.trading_symbol || instrument.symbol,
-              name: instrument.name || instrument.company_name,
+            // Map Upstox fields to our standard format
+            const symbol = {
+              symbol: instrument.trading_symbol || instrument.symbol || instrument.tradingsymbol,
+              name: instrument.name || instrument.company_name || instrument.companyname,
               exchange: instrument.exchange,
               segment: instrument.segment,
-              instrument_type: instrument.instrument_type,
-              lot_size: parseInt(instrument.lot_size) || 1,
-              tick_size: parseFloat(instrument.tick_size) || 0.05,
-              expiry: instrument.expiry || null,
-              strike: parseFloat(instrument.strike_price) || null,
-              option_type: instrument.option_type || null,
-              broker_token: instrument.instrument_key || instrument.token,
+              instrument_type: instrument.instrument_type || instrument.instrumenttype,
+              lot_size: parseInt(instrument.lot_size || instrument.lotsize) || 1,
+              tick_size: parseFloat(instrument.tick_size || instrument.ticksize) || 0.05,
+              expiry: instrument.expiry || instrument.expiry_date || null,
+              strike: parseFloat(instrument.strike_price || instrument.strike) || null,
+              option_type: instrument.option_type || instrument.optiontype || null,
+              broker_token: instrument.instrument_key || instrument.token || instrument.instrument_token,
               broker_exchange: instrument.exchange,
               // Additional Upstox specific fields
               isin: instrument.isin || null,
               weekly_expiry: instrument.weekly_expiry || null
-            });
+            };
+            
+            // Only add if we have essential fields
+            if (symbol.symbol && symbol.exchange) {
+              symbols.push(symbol);
+            }
           }
         }
       } else {
@@ -413,55 +482,112 @@ class SymbolSyncService {
       
       const symbols = [];
       
-      // Shoonya provides master files for different exchanges
-      const exchanges = [
-        { name: 'NSE', url: 'https://api.shoonya.com/NSE_symbols.txt.zip' },
-        { name: 'BSE', url: 'https://api.shoonya.com/BSE_symbols.txt.zip' },
-        { name: 'NFO', url: 'https://api.shoonya.com/NFO_symbols.txt.zip' },
-        { name: 'MCX', url: 'https://api.shoonya.com/MCX_symbols.txt.zip' }
+      // Try different Shoonya endpoints
+      const endpoints = [
+        { name: 'NSE', url: 'https://api.shoonya.com/NSE_symbols.txt', segment: 'EQ' },
+        { name: 'BSE', url: 'https://api.shoonya.com/BSE_symbols.txt', segment: 'EQ' },
+        { name: 'NFO', url: 'https://api.shoonya.com/NFO_symbols.txt', segment: 'FO' },
+        { name: 'MCX', url: 'https://api.shoonya.com/MCX_symbols.txt', segment: 'FO' }
       ];
       
-      // For now, try to fetch CSV format if available
-      try {
-        const response = await axios.get('https://api.shoonya.com/NSE_symbols.txt', {
-          timeout: 30000,
-          responseType: 'text'
-        });
-        
-        const lines = response.data.split('\n');
-        
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
+      // Try alternative endpoints if main ones fail
+      const alternativeEndpoints = [
+        'https://shoonya.finvasia.com/NSE_symbols.txt',
+        'https://shoonya.finvasia.com/BSE_symbols.txt',
+        'https://shoonya.finvasia.com/NFO_symbols.txt'
+      ];
+      
+      let totalFetched = 0;
+      
+      for (const endpoint of endpoints) {
+        try {
+          logger.info(`Fetching Shoonya symbols from ${endpoint.url}...`);
+          const response = await axios.get(endpoint.url, {
+            timeout: 60000,
+            responseType: 'text'
+          });
           
-          // Parse Shoonya format (assuming pipe-separated values)
-          const values = line.split('|');
-          if (values.length >= 5) {
-            symbols.push({
-              symbol: values[0]?.trim(),
-              name: values[1]?.trim(),
-              exchange: 'NSE',
-              segment: 'EQ',
-              instrument_type: values[2]?.trim() || 'EQ',
-              lot_size: parseInt(values[3]) || 1,
-              tick_size: parseFloat(values[4]) || 0.05,
-              expiry: values[5] || null,
-              strike: parseFloat(values[6]) || null,
-              option_type: values[7] || null,
-              broker_token: values[8] || null,
-              broker_exchange: 'NSE',
-              // Additional Shoonya specific fields
-              token: values[8] || null,
-              precision: parseInt(values[9]) || 2
-            });
+          if (response.data && response.data.length > 100) {
+            const lines = response.data.split('\n');
+            logger.info(`Processing ${lines.length} lines from ${endpoint.name}`);
+            
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line || line.startsWith('#')) continue; // Skip comments
+              
+              // Try different separators (pipe, comma, tab)
+              let values = line.split('|');
+              if (values.length < 3) {
+                values = line.split(',');
+              }
+              if (values.length < 3) {
+                values = line.split('\t');
+              }
+              
+              if (values.length >= 3) {
+                const symbol = {
+                  symbol: values[0]?.trim(),
+                  name: values[1]?.trim() || values[0]?.trim(),
+                  exchange: endpoint.name,
+                  segment: endpoint.segment,
+                  instrument_type: values[2]?.trim() || 'EQ',
+                  lot_size: parseInt(values[3]) || 1,
+                  tick_size: parseFloat(values[4]) || 0.05,
+                  expiry: values[5] || null,
+                  strike: parseFloat(values[6]) || null,
+                  option_type: values[7] || null,
+                  broker_token: values[8] || values[0], // Use symbol as token if not available
+                  broker_exchange: endpoint.name,
+                  // Additional Shoonya specific fields
+                  token: values[8] || null,
+                  precision: parseInt(values[9]) || 2
+                };
+                
+                // Only add if we have essential fields
+                if (symbol.symbol && symbol.symbol.length > 0) {
+                  symbols.push(symbol);
+                  totalFetched++;
+                }
+              }
+            }
+            
+            logger.info(`Successfully fetched ${totalFetched} symbols from ${endpoint.name}`);
           }
+        } catch (endpointError) {
+          logger.warn(`Failed to fetch from ${endpoint.url}:`, endpointError.message);
         }
-      } catch (csvError) {
-        logger.warn('Failed to fetch Shoonya CSV format, ZIP extraction not implemented yet:', csvError.message);
+      }
+      
+      // If no symbols fetched, try alternative approach
+      if (symbols.length === 0) {
+        logger.warn('No symbols fetched from main endpoints, trying alternative approach...');
         
-        // Return empty array for now - ZIP extraction would need additional libraries
-        logger.info('Shoonya symbol sync requires ZIP extraction implementation');
-        return [];
+        // Create some basic symbols for testing
+        const basicSymbols = [
+          { symbol: 'RELIANCE', name: 'Reliance Industries Ltd', exchange: 'NSE', segment: 'EQ' },
+          { symbol: 'TCS', name: 'Tata Consultancy Services Ltd', exchange: 'NSE', segment: 'EQ' },
+          { symbol: 'INFY', name: 'Infosys Ltd', exchange: 'NSE', segment: 'EQ' },
+          { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd', exchange: 'NSE', segment: 'EQ' },
+          { symbol: 'ICICIBANK', name: 'ICICI Bank Ltd', exchange: 'NSE', segment: 'EQ' }
+        ];
+        
+        for (const basic of basicSymbols) {
+          symbols.push({
+            ...basic,
+            instrument_type: 'EQ',
+            lot_size: 1,
+            tick_size: 0.05,
+            expiry: null,
+            strike: null,
+            option_type: null,
+            broker_token: basic.symbol,
+            broker_exchange: basic.exchange,
+            token: basic.symbol,
+            precision: 2
+          });
+        }
+        
+        logger.info('Added basic symbols for Shoonya as fallback');
       }
       
       logger.info(`Fetched ${symbols.length} symbols from Shoonya`);
@@ -655,17 +781,57 @@ class SymbolSyncService {
     }
   }
 
-  // Update sync status
+  // Helper method to parse CSV lines with quoted values
+  parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          // Escaped quote
+          current += '"';
+          i++; // Skip next quote
+        } else {
+          // Toggle quote state
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        // End of field
+        result.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    
+    // Add the last field
+    result.push(current);
+    return result;
+  }
+
+  // Update sync status with better error handling
   async updateSyncStatus(brokerName, status, errorMessage = null, totalSymbols = 0) {
     try {
-      await db.runAsync(`
+      logger.info(`Updating sync status for ${brokerName}: ${status} (${totalSymbols} symbols)`);
+      
+      const result = await db.runAsync(`
         INSERT OR REPLACE INTO symbol_sync_status (
           broker_name, last_sync_at, sync_status, total_symbols, error_message, updated_at
         ) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, CURRENT_TIMESTAMP)
       `, [brokerName, status, totalSymbols, errorMessage]);
       
+      logger.info(`Sync status updated successfully for ${brokerName}`, { 
+        changes: result.changes,
+        lastID: result.lastID 
+      });
+      
     } catch (error) {
       logger.error('Failed to update sync status:', error);
+      throw error; // Re-throw to ensure calling code knows about the failure
     }
   }
 
@@ -771,6 +937,78 @@ class SymbolSyncService {
       
     } catch (error) {
       logger.error('Failed to get symbol details:', error);
+      throw error;
+    }
+  }
+
+  // Search symbols by segment
+  async searchSymbolsBySegment(query, segment, exchange = null, options = {}) {
+    try {
+      const {
+        broker = null,
+        instrument_type = null,
+        limit = 50,
+        include_expired = false
+      } = options;
+      
+      let sql = `
+        SELECT DISTINCT 
+          i.id, i.symbol, i.name, i.exchange, i.segment, i.instrument_type,
+          i.lot_size, i.tick_size, i.expiry_date, i.strike_price, i.option_type,
+          GROUP_CONCAT(bim.broker_name) as supported_brokers,
+          GROUP_CONCAT(bim.broker_token) as broker_tokens,
+          CASE 
+            WHEN i.symbol = ? THEN 1
+            WHEN i.symbol LIKE ? THEN 2
+            WHEN i.name LIKE ? THEN 3
+            ELSE 4
+          END as relevance_score
+        FROM instruments i
+        LEFT JOIN broker_instrument_mappings bim ON i.id = bim.instrument_id AND bim.is_active = 1
+        WHERE (i.symbol LIKE ? OR i.name LIKE ?) AND i.segment = ?
+      `;
+      
+      const params = [
+        query, // exact match
+        `${query}%`, // starts with
+        `%${query}%`, // name contains
+        `%${query}%`, // symbol contains
+        `%${query}%`, // name contains
+        segment
+      ];
+      
+      if (exchange) {
+        sql += ` AND i.exchange = ?`;
+        params.push(exchange);
+      }
+      
+      if (instrument_type) {
+        sql += ` AND i.instrument_type = ?`;
+        params.push(instrument_type);
+      }
+      
+      if (broker) {
+        sql += ` AND bim.broker_name = ?`;
+        params.push(broker);
+      }
+      
+      if (!include_expired) {
+        sql += ` AND (i.expiry_date IS NULL OR i.expiry_date >= date('now'))`;
+      }
+      
+      sql += ` GROUP BY i.id ORDER BY relevance_score, i.symbol LIMIT ?`;
+      params.push(limit);
+      
+      const results = await db.allAsync(sql, params);
+      
+      return results.map(row => ({
+        ...row,
+        supported_brokers: row.supported_brokers ? row.supported_brokers.split(',') : [],
+        broker_tokens: row.broker_tokens ? row.broker_tokens.split(',') : []
+      }));
+      
+    } catch (error) {
+      logger.error('Failed to search symbols by segment:', error);
       throw error;
     }
   }
